@@ -41,8 +41,9 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{
             __html: `
               (function() {
-                // Hard-lock the page scale as much as the browser allows.
-                // 1) Block pinch-zoom and double-tap zoom gestures.
+                // Block pinch-zoom and double-tap zoom gestures as much as the
+                // platform allows, without trying to fight the visual viewport
+                // with manual transforms or scrollTo calls.
                 document.addEventListener('gesturestart', function (e) {
                   e.preventDefault();
                 }, { passive: false });
@@ -61,66 +62,20 @@ export default function RootLayout({
                   }
                   lastTouchEnd = now;
                 }, { passive: false });
-
-                // 2) Use the VisualViewport API to actively neutralize any zoom
-                // scale that the browser applies (including on input focus).
-                function normalizeViewport() {
-                  if (!window.visualViewport) {
-                    window.scrollTo(0, 0);
-                    return;
-                  }
-
-                  var vv = window.visualViewport;
-                  var scale = vv.scale || 1;
-                  var offsetX = vv.offsetLeft || 0;
-                  var offsetY = vv.offsetTop || 0;
-                  var docEl = document.documentElement;
-
-                  if (scale !== 1 || offsetX !== 0 || offsetY !== 0) {
-                    // Counteract the browser's zoom by applying the inverse
-                    // transform to the entire document. This keeps the apparent
-                    // scale and position of the game stable even when the
-                    // keyboard opens, inputs focus, or the user pinches.
-                    docEl.style.transformOrigin = 'top left';
-                    docEl.style.transform =
-                      'translate(' + offsetX + 'px,' + offsetY + 'px) scale(' + (1 / scale) + ')';
-                  } else {
-                    docEl.style.transform = '';
-                    docEl.style.transformOrigin = '';
-                  }
-
-                  // Also make sure we stay pinned to the top-left of the page.
-                  window.scrollTo(0, 0);
-                }
-
-                document.addEventListener('focusin', function (e) {
-                  if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
-                    setTimeout(normalizeViewport, 0);
-                  }
-                });
-
-                if (window.visualViewport) {
-                  var vv = window.visualViewport;
-                  vv.addEventListener('resize', normalizeViewport);
-                  vv.addEventListener('scroll', normalizeViewport);
-                  normalizeViewport();
-                }
-
-                window.addEventListener('orientationchange', function () {
-                  setTimeout(normalizeViewport, 0);
-                });
               })();
             `,
           }}
         />
       </head>
-      <body className="min-h-screen flex items-stretch justify-center">
-        <div className="flex w-full max-w-md mx-auto px-3 py-4 sm:max-w-lg sm:px-4">
-          <div className="relative flex-1 rounded-3xl bg-otc-surface/90 shadow-otc-card border border-white/10 overflow-hidden">
-            <div className="pointer-events-none absolute inset-0 opacity-30 mix-blend-screen bg-[radial-gradient(circle_at_10%_0%,#ffbf69_0,#ff5fa200_60%),radial-gradient(circle_at_90%_100%,#5cf2ff_0,#5cf2ff00_55%)]" />
-            <main className="relative pointer-events-auto h-full w-full flex flex-col">
-              {children}
-            </main>
+      <body className="min-h-screen overflow-hidden">
+        <div className="fixed inset-0 flex items-stretch justify-center">
+          <div className="flex w-full max-w-md mx-auto px-3 py-4 sm:max-w-lg sm:px-4">
+            <div className="relative flex-1 rounded-3xl bg-otc-surface/90 shadow-otc-card border border-white/10 overflow-hidden">
+              <div className="pointer-events-none absolute inset-0 opacity-30 mix-blend-screen bg-[radial-gradient(circle_at_10%_0%,#ffbf69_0,#ff5fa200_60%),radial-gradient(circle_at_90%_100%,#5cf2ff_0,#5cf2ff00_55%)]" />
+              <main className="relative pointer-events-auto h-full w-full flex flex-col">
+                {children}
+              </main>
+            </div>
           </div>
         </div>
       </body>

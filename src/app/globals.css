@@ -52,7 +52,5 @@ button,
   }
 }
 
-/* Scroll behavior for mobile */
-html {
-  scroll-behavior: smooth;
-}
+/* Avoid smooth scroll on the root so any programmatic scrollTo
+   (e.g., when the keyboard opens) does not slowly pan the viewport. */
