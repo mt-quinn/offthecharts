@@ -36,7 +36,7 @@ const DAILY_STORAGE_KEY = "off-the-charts-game-v1";
 // Changing it changes both:
 // - the seed passed into pickDailyAdjectives
 // - the dateKey stored in localStorage, so old games are discarded
-const DAILY_SEED_VERSION = 2;
+const DAILY_SEED_VERSION = 3;
 
 function todayKey() {
   const base = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
