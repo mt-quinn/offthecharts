@@ -33,7 +33,6 @@ export const BASE_ADJECTIVES: string[] = [
   "dangerous",
   "delicate",
   "dramatic",
-  "elegant",
   "elusive",
   "energetic",
   "ethereal",

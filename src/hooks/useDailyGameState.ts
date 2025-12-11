@@ -32,8 +32,15 @@ export type GameState = {
 
 const DAILY_STORAGE_KEY = "off-the-charts-game-v1";
 
+// Bump this version to force a fresh daily puzzle for a given date.
+// Changing it changes both:
+// - the seed passed into pickDailyAdjectives
+// - the dateKey stored in localStorage, so old games are discarded
+const DAILY_SEED_VERSION = 2;
+
 function todayKey() {
-  return new Date().toISOString().slice(0, 10);
+  const base = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  return `${base}-v${DAILY_SEED_VERSION}`;
 }
 
 function emptyGuesses(): GuessResult[][] {
