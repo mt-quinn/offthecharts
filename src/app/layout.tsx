@@ -41,7 +41,8 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{
             __html: `
               (function() {
-                // Prevent pinch-zoom gestures
+                // Hard-lock the page scale as much as the browser allows.
+                // 1) Block pinch-zoom and double-tap zoom gestures.
                 document.addEventListener('gesturestart', function (e) {
                   e.preventDefault();
                 }, { passive: false });
@@ -52,7 +53,6 @@ export default function RootLayout({
                   e.preventDefault();
                 }, { passive: false });
 
-                // Prevent double-tap zoom
                 var lastTouchEnd = 0;
                 document.addEventListener('touchend', function (e) {
                   var now = Date.now();
@@ -62,26 +62,52 @@ export default function RootLayout({
                   lastTouchEnd = now;
                 }, { passive: false });
 
-                // Keep the viewport pinned; avoid scroll/zoom jumps on focus,
-                // keyboard open, or orientation changes.
-                function lockViewport() {
+                // 2) Use the VisualViewport API to actively neutralize any zoom
+                // scale that the browser applies (including on input focus).
+                function normalizeViewport() {
+                  if (!window.visualViewport) {
+                    window.scrollTo(0, 0);
+                    return;
+                  }
+
+                  var vv = window.visualViewport;
+                  var scale = vv.scale || 1;
+                  var offsetX = vv.offsetLeft || 0;
+                  var offsetY = vv.offsetTop || 0;
+                  var docEl = document.documentElement;
+
+                  if (scale !== 1 || offsetX !== 0 || offsetY !== 0) {
+                    // Counteract the browser's zoom by applying the inverse
+                    // transform to the entire document. This keeps the apparent
+                    // scale and position of the game stable even when the
+                    // keyboard opens, inputs focus, or the user pinches.
+                    docEl.style.transformOrigin = 'top left';
+                    docEl.style.transform =
+                      'translate(' + offsetX + 'px,' + offsetY + 'px) scale(' + (1 / scale) + ')';
+                  } else {
+                    docEl.style.transform = '';
+                    docEl.style.transformOrigin = '';
+                  }
+
+                  // Also make sure we stay pinned to the top-left of the page.
                   window.scrollTo(0, 0);
                 }
 
                 document.addEventListener('focusin', function (e) {
                   if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
-                    setTimeout(lockViewport, 0);
+                    setTimeout(normalizeViewport, 0);
                   }
                 });
 
                 if (window.visualViewport) {
                   var vv = window.visualViewport;
-                  vv.addEventListener('resize', lockViewport);
-                  vv.addEventListener('scroll', lockViewport);
+                  vv.addEventListener('resize', normalizeViewport);
+                  vv.addEventListener('scroll', normalizeViewport);
+                  normalizeViewport();
                 }
 
                 window.addEventListener('orientationchange', function () {
-                  setTimeout(lockViewport, 0);
+                  setTimeout(normalizeViewport, 0);
                 });
               })();
             `,
