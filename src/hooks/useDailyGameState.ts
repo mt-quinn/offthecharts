@@ -180,12 +180,10 @@ export function useDailyGameState() {
       if (!prev) return prev;
       const maxTurns = 5;
       let nextTurnIndex = prev.currentTurnIndex + 1;
-      // Skip locked guesses (perfect score 20 = 10+10)
+      // Skip passes
       while (nextTurnIndex < maxTurns) {
         const guess = prev.guesses[nextTurnIndex];
-        const isLocked = guess?.isPass || 
-          (guess?.scores && guess.scores[0] + guess.scores[1] === 20);
-        if (isLocked) {
+        if (guess?.isPass) {
           nextTurnIndex++;
           continue;
         }

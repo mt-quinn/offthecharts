@@ -82,7 +82,7 @@ export function Game() {
   // Reset used categories when a new game starts
   useEffect(() => {
     if (!state) return;
-    const gameKey = `${state.adjectives[0]}-${state.adjectives[1]}-${state.dateKey}`;
+    const gameKey = state.dateKey;
     if (lastGameKeyRef.current !== gameKey) {
       usedCategoriesRef.current.clear();
       lastGameKeyRef.current = gameKey;
@@ -131,50 +131,55 @@ export function Game() {
     return () => window.removeEventListener('resize', updatePosition);
   }, [state, isComplete, awaitingNextCategory]);
 
-  // Track score changes for animation (must be before early return)
-  const getBestScoresForAnimation = (): [number, number] => {
+  // Calculate cumulative scores for animation (must be before early return)
+  const getCumulativeScoresForAnimation = (): [number, number] => {
     if (!state) return [0, 0];
-    const combinedScores = state.guesses.map((g) => {
-      if (!g.scores) return 0;
-      return g.scores[0] + g.scores[1];
+    let total1 = 0;
+    let total2 = 0;
+    state.guesses.forEach((guess) => {
+      if (guess.scores && !guess.isPass) {
+        total1 += guess.scores[0];
+        total2 += guess.scores[1];
+      }
     });
-    const bestScore = Math.max(0, ...combinedScores);
-    if (bestScore <= 0) return [0, 0];
-    const candidateIndices = combinedScores
-      .map((_, i) => i)
-      .filter((i) => combinedScores[i] === bestScore && !state.guesses[i].isPass);
-    if (candidateIndices.length === 0) return [0, 0];
-    const bestGuess = state.guesses[candidateIndices[0]];
-    if (!bestGuess.scores) return [0, 0];
-    return [bestGuess.scores[0], bestGuess.scores[1]];
+    return [total1, total2];
   };
 
-  // Get a random unused category for the current round (must be before early return)
+  // Get a deterministic category for the current round based on daily seed (must be before early return)
   const placeholderCategory = useMemo(() => {
     if (!state || !currentTurn) return PLACEHOLDER_CATEGORIES[0];
     const roundIndex = currentTurn.roundIndex;
+    const dateKey = state.dateKey;
     
     // Check if we already have a category assigned for this round
     if (usedCategoriesRef.current.has(roundIndex)) {
       return usedCategoriesRef.current.get(roundIndex)!;
     }
     
-    // Get all used categories so far
-    const used = Array.from(usedCategoriesRef.current.values());
+    // Deterministically select all 5 categories based on dateKey
+    // Use a simple hash function similar to pickDailyAdjectives
+    let hash = 0;
+    for (let i = 0; i < dateKey.length; i++) {
+      hash = (hash * 31 + dateKey.charCodeAt(i)) >>> 0;
+    }
     
-    // Get available categories (not yet used)
-    const available = PLACEHOLDER_CATEGORIES.filter(cat => !used.includes(cat));
+    // Select 5 categories deterministically for rounds 0-4
+    const selectedCategories: string[] = [];
+    const available = [...PLACEHOLDER_CATEGORIES];
     
-    // If all categories have been used, reset and start over
-    const pool = available.length > 0 ? available : PLACEHOLDER_CATEGORIES;
+    for (let round = 0; round < 5; round++) {
+      hash = (hash * 1664525 + 1013904223) >>> 0; // LCG
+      const idx = hash % available.length;
+      selectedCategories.push(available[idx]);
+      available.splice(idx, 1);
+    }
     
-    // Pick a random category from the pool
-    const selected = pool[Math.floor(Math.random() * pool.length)];
+    // Store all categories for all rounds
+    selectedCategories.forEach((cat, idx) => {
+      usedCategoriesRef.current.set(idx, cat);
+    });
     
-    // Store it for this round
-    usedCategoriesRef.current.set(roundIndex, selected);
-    
-    return selected;
+    return selectedCategories[roundIndex];
   }, [state, currentTurn]);
 
 
@@ -255,11 +260,6 @@ export function Game() {
         // Mark that first score has been received (triggers pillar appearance)
         if (!firstScoreReceived) {
           setFirstScoreReceived(true);
-          // Start initial fill animation after pillars have appeared
-          // Don't reset isInitialFill - let it stay true so the fill stays
-          setTimeout(() => {
-            setIsInitialFill(true);
-          }, 300);
         }
         
         applyScore(
@@ -267,12 +267,20 @@ export function Game() {
           [data.score1, data.score2],
           [data.reasoning1 || "", data.reasoning2 || ""],
         );
-
-        // If the model gives a perfect 20 (10+10), treat the game as finished:
-        // show the \"See results\" phase instead of auto-advancing immediately.
-        if (data.score1 === 10 && data.score2 === 10) {
-          setAwaitingNextCategory(true);
-          return;
+        
+        // Trigger animation after state updates (for cumulative score changes)
+        // Reset animation state to trigger re-animation
+        if (firstScoreReceived) {
+          setIsInitialFill(false);
+          setTimeout(() => {
+            setIsInitialFill(true);
+          }, 100);
+        } else {
+          // First score - trigger initial animation
+          setFirstScoreReceived(true);
+          setTimeout(() => {
+            setIsInitialFill(true);
+          }, 300);
         }
       }
 
@@ -424,17 +432,22 @@ export function Game() {
     return candidateIndices[0];
   };
 
-  const getBestScores = (): [number, number] => {
+  // Calculate cumulative scores (sum of all guesses)
+  const getCumulativeScores = (): [number, number] => {
     if (!state) return [0, 0];
-    const bestIndex = getBestIndex(state.guesses);
-    if (bestIndex < 0) return [0, 0];
-    const bestGuess = state.guesses[bestIndex];
-    if (!bestGuess.scores) return [0, 0];
-    return [bestGuess.scores[0], bestGuess.scores[1]];
+    let total1 = 0;
+    let total2 = 0;
+    state.guesses.forEach((guess) => {
+      if (guess.scores && !guess.isPass) {
+        total1 += guess.scores[0];
+        total2 += guess.scores[1];
+      }
+    });
+    return [total1, total2];
   };
 
-  const currentRoundMax = 20;
-  const [bestScore1, bestScore2] = getBestScores();
+  const [cumulativeScore1, cumulativeScore2] = getCumulativeScores();
+  const maxScore = 50; // Maximum cumulative score (5 guesses * 10 each)
 
   return (
     <div className="h-full flex flex-col relative">
@@ -442,14 +455,24 @@ export function Game() {
       {firstScoreReceived && (
         <>
           <div className="absolute left-2 bottom-6 w-3 pointer-events-none pt-2 overflow-hidden rounded" style={{ top: `${categoryBottom}px`, height: `calc(100% - ${categoryBottom}px - 1.5rem)` }}>
-            {/* Segments with fill animation */}
+            {/* Segments with fill animation - each segment = 5 points (0-50 total) */}
             <div className="h-full flex flex-col-reverse gap-0.5">
               {Array.from({ length: 10 }, (_, i) => {
-                const shouldFill = i < bestScore1;
+                const segmentThreshold = (i + 1) * 5; // Segment 0 = 5pts, segment 9 = 50pts
+                const prevThreshold = i * 5; // Previous segment threshold
+                const isStarSegment = i === 4 || i === 6 || i === 8; // Segments at 25, 35, 45
+                const starLevel = i === 4 ? 1 : i === 6 ? 2 : i === 8 ? 3 : null;
+                
+                // Calculate fill: if score >= segmentThreshold, fully filled; if between thresholds, partial
+                const shouldFillFully = cumulativeScore1 >= segmentThreshold;
+                const shouldFillPartially = cumulativeScore1 > prevThreshold && cumulativeScore1 < segmentThreshold;
+                const partialFillPercent = shouldFillPartially 
+                  ? ((cumulativeScore1 - prevThreshold) / 5) * 100 
+                  : 100;
+                
                 // With flex-col-reverse, i=0 appears at bottom, i=9 appears at top
-                // So delay should be i * 0.18 to fill from bottom to top
-                const fillDelay = isInitialFill && bestScore1 > 0 ? (i * 0.18) : 0;
-                const fillHeight = isInitialFill && shouldFill ? '100%' : '0%';
+                const fillDelay = isInitialFill && (shouldFillFully || shouldFillPartially) ? (i * 0.18) : 0;
+                const fillHeight = isInitialFill && (shouldFillFully || shouldFillPartially) ? `${partialFillPercent}%` : '0%';
                 
                 return (
                   <div
@@ -464,23 +487,39 @@ export function Game() {
                       className="absolute bottom-0 left-0 right-0 bg-pink-400 shadow-[0_0_4px_rgba(244,114,182,0.6)] rounded"
                       style={{
                         height: fillHeight,
-                        transition: isInitialFill && shouldFill ? `height 0.2s linear ${fillDelay}s` : 'none',
+                        transition: isInitialFill && (shouldFillFully || shouldFillPartially) ? `height 0.2s linear ${fillDelay}s` : 'none',
                       }}
                     />
+                    {/* Star indicator */}
+                    {isStarSegment && (
+                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                        <div className="text-[0.5rem] text-yellow-300 font-bold">★</div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
           </div>
           <div className="absolute right-2 bottom-6 w-3 pointer-events-none pt-2 overflow-hidden rounded" style={{ top: `${categoryBottom}px`, height: `calc(100% - ${categoryBottom}px - 1.5rem)` }}>
-            {/* Segments with fill animation */}
+            {/* Segments with fill animation - each segment = 5 points (0-50 total) */}
             <div className="h-full flex flex-col-reverse gap-0.5">
               {Array.from({ length: 10 }, (_, i) => {
-                const shouldFill = i < bestScore2;
+                const segmentThreshold = (i + 1) * 5; // Segment 0 = 5pts, segment 9 = 50pts
+                const prevThreshold = i * 5; // Previous segment threshold
+                const isStarSegment = i === 4 || i === 6 || i === 8; // Segments at 25, 35, 45
+                const starLevel = i === 4 ? 1 : i === 6 ? 2 : i === 8 ? 3 : null;
+                
+                // Calculate fill: if score >= segmentThreshold, fully filled; if between thresholds, partial
+                const shouldFillFully = cumulativeScore2 >= segmentThreshold;
+                const shouldFillPartially = cumulativeScore2 > prevThreshold && cumulativeScore2 < segmentThreshold;
+                const partialFillPercent = shouldFillPartially 
+                  ? ((cumulativeScore2 - prevThreshold) / 5) * 100 
+                  : 100;
+                
                 // With flex-col-reverse, i=0 appears at bottom, i=9 appears at top
-                // So delay should be i * 0.18 to fill from bottom to top
-                const fillDelay = isInitialFill && bestScore2 > 0 ? (i * 0.18) : 0;
-                const fillHeight = isInitialFill && shouldFill ? '100%' : '0%';
+                const fillDelay = isInitialFill && (shouldFillFully || shouldFillPartially) ? (i * 0.18) : 0;
+                const fillHeight = isInitialFill && (shouldFillFully || shouldFillPartially) ? `${partialFillPercent}%` : '0%';
                 
                 return (
                   <div
@@ -495,9 +534,15 @@ export function Game() {
                       className="absolute bottom-0 left-0 right-0 bg-cyan-400 shadow-[0_0_4px_rgba(34,211,238,0.6)] rounded"
                       style={{
                         height: fillHeight,
-                        transition: isInitialFill && shouldFill ? `height 0.2s linear ${fillDelay}s` : 'none',
+                        transition: isInitialFill && (shouldFillFully || shouldFillPartially) ? `height 0.2s linear ${fillDelay}s` : 'none',
                       }}
                     />
+                    {/* Star indicator */}
+                    {isStarSegment && (
+                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                        <div className="text-[0.5rem] text-yellow-300 font-bold">★</div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -539,9 +584,9 @@ export function Game() {
           </div>
 
           <div className="text-right text-[0.7rem] leading-tight">
-            <div className="text-otc-muted">Score</div>
+            <div className="text-otc-muted">Total</div>
             <div className="font-semibold text-otc-accent-alt text-sm">
-              {totalScore} / {currentRoundMax}
+              {cumulativeScore1 + cumulativeScore2} / {previousGuesses.length * 20 || 20}
             </div>
           </div>
         </div>
@@ -573,10 +618,18 @@ export function Game() {
             <div className="mt-0.5 text-[0.8rem] sm:text-sm font-semibold text-otc-muted text-center">
               Submit a word, phrase, person, or concept that is
             </div>
-            <div className="mt-0.5 font-display text-xl sm:text-2xl drop-shadow-otc-glow text-center">
-              <span className="text-pink-400">{adjective1.toUpperCase()}</span>
-              <span style={{ color: 'rgb(255, 179, 21)' }}> & </span>
-              <span className="text-cyan-400">{adjective2.toUpperCase()}</span>
+            <div className="mt-0.5 font-display text-xl sm:text-2xl drop-shadow-otc-glow text-center flex items-center justify-center">
+              <div className="text-[0.7rem] font-semibold text-pink-400 mr-4">
+                {cumulativeScore1} / {previousGuesses.length * 10 || 10}
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-pink-400">{adjective1.toUpperCase()}</span>
+                <span style={{ color: 'rgb(255, 179, 21)' }}> & </span>
+                <span className="text-cyan-400">{adjective2.toUpperCase()}</span>
+              </div>
+              <div className="text-[0.7rem] font-semibold text-cyan-400 ml-4">
+                {cumulativeScore2} / {previousGuesses.length * 10 || 10}
+              </div>
             </div>
           </section>
         </div>
@@ -711,21 +764,41 @@ export function Game() {
           </>
         )}
 
-        {isComplete && (
-          <section className="mt-1 rounded-2xl bg-black/30 border border-otc-accent/40 px-4 py-3 space-y-2">
-            <div className="text-[0.7rem] tracking-[0.2em] uppercase text-otc-muted">
-              Final tally
-            </div>
-            <div className="text-lg font-semibold">
-              You scored <span className="text-otc-accent-alt">{totalScore}</span>
-              <span className="text-otc-muted text-sm"> / 20 possible points.</span>
-            </div>
-            <div className="text-[0.8rem] sm:text-sm font-semibold text-center text-otc-accent-alt">
-              That's a wrap! Scroll down to review the game and appeal your most
-              underrated answer.
-            </div>
-          </section>
-        )}
+        {isComplete && (() => {
+          const lowestBar = Math.min(cumulativeScore1, cumulativeScore2);
+          const stars = lowestBar >= 45 ? 3 : lowestBar >= 35 ? 2 : lowestBar >= 25 ? 1 : 0;
+          return (
+            <section className="mt-1 rounded-2xl bg-black/30 border border-otc-accent/40 px-4 py-3 space-y-2">
+              <div className="text-[0.7rem] tracking-[0.2em] uppercase text-otc-muted">
+                Final tally
+              </div>
+              <div className="text-lg font-semibold">
+                You scored <span className="text-otc-accent-alt">{cumulativeScore1 + cumulativeScore2}</span>
+                <span className="text-otc-muted text-sm"> / {maxScore * 2} total points</span>
+              </div>
+              <div className="flex items-center justify-center gap-2">
+                <div className="text-[0.8rem] text-otc-muted">Rating:</div>
+                <div className="flex gap-1">
+                  {Array.from({ length: 3 }, (_, i) => (
+                    <span
+                      key={i}
+                      className={`text-xl ${i < stars ? 'text-yellow-300' : 'text-otc-muted/30'}`}
+                    >
+                      ★
+                    </span>
+                  ))}
+                </div>
+                <div className="text-[0.7rem] text-otc-muted">
+                  ({lowestBar >= 45 ? '3 stars' : lowestBar >= 35 ? '2 stars' : lowestBar >= 25 ? '1 star' : '0 stars'})
+                </div>
+              </div>
+              <div className="text-[0.8rem] sm:text-sm font-semibold text-center text-otc-accent-alt">
+                That's a wrap! Scroll down to review the game and appeal your most
+                underrated answer.
+              </div>
+            </section>
+          );
+        })()}
 
         {isComplete && (
           <section className="mt-1 rounded-2xl bg-otc-bg-soft/90 border border-white/10 px-4 py-3 space-y-2">
@@ -749,9 +822,9 @@ export function Game() {
                       {adjective1.toUpperCase()} & {adjective2.toUpperCase()}
                     </span>
                   </div>
-                  {totalScore > 0 && (
+                  {firstScoreReceived && (
                     <div className="text-[0.7rem] text-otc-accent-alt">
-                      Best: {totalScore} / 20
+                      Total: {cumulativeScore1 + cumulativeScore2} / {maxScore * 2}
                     </div>
                   )}
                 </div>
