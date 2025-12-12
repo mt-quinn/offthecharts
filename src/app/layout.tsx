@@ -20,11 +20,11 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  width: "device-width",
-  initialScale: 1,
-  minimumScale: 1,
-  maximumScale: 1,
-  userScalable: false,
+    width: "device-width",
+    initialScale: 1,
+    minimumScale: 1,
+    maximumScale: 1,
+    userScalable: false,
 };
 
 export default function RootLayout({
@@ -69,12 +69,12 @@ export default function RootLayout({
       </head>
       <body className="min-h-screen overflow-hidden">
         <div className="fixed inset-0 flex items-stretch justify-center">
-          <div className="flex w-full max-w-md mx-auto px-3 py-4 sm:max-w-lg sm:px-4">
-            <div className="relative flex-1 rounded-3xl bg-otc-surface/90 shadow-otc-card border border-white/10 overflow-hidden">
-              <div className="pointer-events-none absolute inset-0 opacity-30 mix-blend-screen bg-[radial-gradient(circle_at_10%_0%,#ffbf69_0,#ff5fa200_60%),radial-gradient(circle_at_90%_100%,#5cf2ff_0,#5cf2ff00_55%)]" />
-              <main className="relative pointer-events-auto h-full w-full flex flex-col">
-                {children}
-              </main>
+        <div className="flex w-full max-w-md mx-auto px-3 py-4 sm:max-w-lg sm:px-4">
+          <div className="relative flex-1 rounded-3xl bg-otc-surface/90 shadow-otc-card border border-white/10 overflow-hidden">
+            <div className="pointer-events-none absolute inset-0 opacity-30 mix-blend-screen bg-[radial-gradient(circle_at_10%_0%,#ffbf69_0,#ff5fa200_60%),radial-gradient(circle_at_90%_100%,#5cf2ff_0,#5cf2ff00_55%)]" />
+            <main className="relative pointer-events-auto h-full w-full flex flex-col">
+              {children}
+            </main>
             </div>
           </div>
         </div>
