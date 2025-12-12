@@ -3,11 +3,12 @@ import { DEFAULT_MODEL_ID, getOpenAIClient } from "@/lib/openai";
 
 export async function POST(req: Request) {
   try {
-    const { adjective1, adjective2, noun, previousNouns } = (await req.json()) as {
+    const { adjective1, adjective2, noun, previousNouns, placeholderCategory } = (await req.json()) as {
       adjective1?: string;
       adjective2?: string;
       noun?: string;
       previousNouns?: string[];
+      placeholderCategory?: string;
     };
 
     if (!adjective1 || !adjective2 || !noun) {
@@ -19,7 +20,7 @@ export async function POST(req: Request) {
 
     const openai = getOpenAIClient();
 
-    const prompt = buildScoringPrompt(adjective1, adjective2, noun, previousNouns || []);
+    const prompt = buildScoringPrompt(adjective1, adjective2, noun, previousNouns || [], placeholderCategory);
 
     const response = await openai.chat.completions.create({
       model: DEFAULT_MODEL_ID,
@@ -54,6 +55,7 @@ function buildScoringPrompt(
   adjective2: string,
   noun: string,
   previousNouns: string[],
+  placeholderCategory?: string,
 ): string {
   const allAnswers = [...previousNouns, noun];
 
@@ -64,10 +66,14 @@ function buildScoringPrompt(
           .map((answer, index) => `${index}: ${answer}`)
           .join("; ");
 
+  const categoryContext = placeholderCategory 
+    ? `\n\nCONTEXT NOTE: The player saw a prompt suggesting they try a "${placeholderCategory}". This is provided ONLY for context to help you understand why they might have given this type of answer. Do NOT use this to penalize them - if they gave a different type of answer, that's perfectly fine. Score based solely on how well the answer matches the two adjectives, regardless of whether it matches the suggested category type.`
+    : "";
+
   return `You are the strict, impartial judge and charismatic host of a groovy TV game show.
 
 The player is given TWO ADJECTIVES and tries to name WORDS AND PHRASES that feel like strong, vivid matches to BOTH adjectives simultaneously.
-Your job is to rate each answer on how well it matches EACH adjective separately (1–10 for each), then give a short, in-character explanation, as if you are talking directly to the contestant on stage.
+Your job is to rate each answer on how well it matches EACH adjective separately (1–10 for each), then give a short, in-character explanation, as if you are talking directly to the contestant on stage.${categoryContext}
 
 SCORING SCALE (1–10 for EACH adjective, you MUST use the whole range):
 - 1–2 = very weak fit; barely or not really connected to the adjective.

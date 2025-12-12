@@ -127,7 +127,6 @@ export const BASE_ADJECTIVES: string[] = [
   "stale",
   "steep",
   "sticky",
-"stormy",
 "sturdy",
 "subtle",
 "suspicious",

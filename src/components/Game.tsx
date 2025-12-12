@@ -18,6 +18,19 @@ type AppealResponse = {
   accepted?: boolean;
 };
 
+const PLACEHOLDER_CATEGORIES = [
+  "Concept",
+  "Cultural Icon",
+  "Whole Sentence",
+  "Sports Team",
+  "Organism",
+  "Philosophy",
+  "Scenario",
+  "Piece of Media",
+  "Organization",
+  "Piece of Technology",
+];
+
 export function Game() {
   const {
     state,
@@ -53,6 +66,8 @@ export function Game() {
   const [firstScoreReceived, setFirstScoreReceived] = useState(false);
   // Track if initial fill animation is in progress
   const [isInitialFill, setIsInitialFill] = useState(false);
+  // Track which placeholder categories have been used for each round
+  const usedCategoriesRef = useRef<Map<number, string>>(new Map());
 
   // Temporarily force debug tools on in all builds (including production)
   // so they are available while testing.
@@ -62,6 +77,17 @@ export function Game() {
   // (category/guess pair). This avoids wiping in-progress typing when
   // background scoring updates earlier guesses.
   const lastTurnIdxRef = useRef<number | null>(null);
+  const lastGameKeyRef = useRef<string | null>(null);
+
+  // Reset used categories when a new game starts
+  useEffect(() => {
+    if (!state) return;
+    const gameKey = `${state.adjectives[0]}-${state.adjectives[1]}-${state.dateKey}`;
+    if (lastGameKeyRef.current !== gameKey) {
+      usedCategoriesRef.current.clear();
+      lastGameKeyRef.current = gameKey;
+    }
+  }, [state]);
 
   useEffect(() => {
     if (!state || !currentTurn) return;
@@ -122,6 +148,34 @@ export function Game() {
     if (!bestGuess.scores) return [0, 0];
     return [bestGuess.scores[0], bestGuess.scores[1]];
   };
+
+  // Get a random unused category for the current round (must be before early return)
+  const placeholderCategory = useMemo(() => {
+    if (!state || !currentTurn) return PLACEHOLDER_CATEGORIES[0];
+    const roundIndex = currentTurn.roundIndex;
+    
+    // Check if we already have a category assigned for this round
+    if (usedCategoriesRef.current.has(roundIndex)) {
+      return usedCategoriesRef.current.get(roundIndex)!;
+    }
+    
+    // Get all used categories so far
+    const used = Array.from(usedCategoriesRef.current.values());
+    
+    // Get available categories (not yet used)
+    const available = PLACEHOLDER_CATEGORIES.filter(cat => !used.includes(cat));
+    
+    // If all categories have been used, reset and start over
+    const pool = available.length > 0 ? available : PLACEHOLDER_CATEGORIES;
+    
+    // Pick a random category from the pool
+    const selected = pool[Math.floor(Math.random() * pool.length)];
+    
+    // Store it for this round
+    usedCategoriesRef.current.set(roundIndex, selected);
+    
+    return selected;
+  }, [state, currentTurn]);
 
 
   const handleSubmitGuess = async () => {
@@ -187,6 +241,7 @@ export function Game() {
           adjective2,
           noun: trimmed,
           previousNouns,
+          placeholderCategory,
         }),
       });
 
@@ -595,20 +650,25 @@ export function Game() {
                       />
                       {!currentInput && !submitting && (
                         <div className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-otc-muted">
-                          <span>{`Try something that feels\u00a0`}</span>
-                          <span className="font-semibold text-otc-accent">
+                          <span>{`Try a\u00a0`}</span>
+                          <span className="font-semibold" style={{ color: 'rgb(255, 179, 21)' }}>
+                            {placeholderCategory}
+                          </span>
+                          <span>{`\u00a0that feels\u00a0`}</span>
+                          <span className="font-semibold text-pink-400">
                             {adjective1}
                           </span>
                           <span>{`\u00a0and\u00a0`}</span>
-                          <span className="font-semibold text-otc-accent">
+                          <span className="font-semibold text-cyan-400">
                             {adjective2}
                           </span>
-                          <span>{`\u00a0to you`}</span>
                         </div>
                       )}
-                      <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[0.7rem] text-otc-muted/70">
-                        {currentInput.length}/64
-                      </div>
+                      {currentInput.length > 0 && (
+                        <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[0.7rem] text-otc-muted/70">
+                          {currentInput.length}/64
+                        </div>
+                      )}
                     </div>
                   </div>
 
