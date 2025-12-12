@@ -82,7 +82,10 @@ export function Game() {
   // Reset used categories when a new game starts
   useEffect(() => {
     if (!state) return;
-    const gameKey = state.dateKey;
+    // For daily mode, use dateKey; for debug-random, use adjectives to ensure fresh categories per game
+    const gameKey = state.mode === "debug-random" 
+      ? `random-${state.adjectives[0]}-${state.adjectives[1]}`
+      : state.dateKey;
     if (lastGameKeyRef.current !== gameKey) {
       usedCategoriesRef.current.clear();
       lastGameKeyRef.current = gameKey;
@@ -160,7 +163,9 @@ export function Game() {
       const used = Array.from(usedCategoriesRef.current.values());
       const available = PLACEHOLDER_CATEGORIES.filter(cat => !used.includes(cat));
       const pool = available.length > 0 ? available : PLACEHOLDER_CATEGORIES;
-      const selected = pool[Math.floor(Math.random() * pool.length)];
+      // Shuffle the pool to ensure truly random selection
+      const shuffled = [...pool].sort(() => Math.random() - 0.5);
+      const selected = shuffled[0];
       usedCategoriesRef.current.set(roundIndex, selected);
       return selected;
     }
