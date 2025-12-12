@@ -649,19 +649,21 @@ export function Game() {
                         disabled={submitting}
                       />
                       {!currentInput && !submitting && (
-                        <div className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-otc-muted">
-                          <span>{`Try a\u00a0`}</span>
-                          <span className="font-semibold" style={{ color: 'rgb(255, 179, 21)' }}>
-                            {placeholderCategory}
-                          </span>
-                          <span>{`\u00a0that feels\u00a0`}</span>
-                          <span className="font-semibold text-pink-400">
-                            {adjective1}
-                          </span>
-                          <span>{`\u00a0and\u00a0`}</span>
-                          <span className="font-semibold text-cyan-400">
-                            {adjective2}
-                          </span>
+                        <div className="pointer-events-none absolute inset-y-0 left-3 right-3 flex items-center text-otc-muted overflow-hidden">
+                          <div className="whitespace-nowrap overflow-hidden flex items-center" style={{ fontSize: 'clamp(0.7rem, 2.5vw, 0.875rem)' }}>
+                            <span>{`Try a\u00a0`}</span>
+                            <span className="font-semibold" style={{ color: 'rgb(255, 179, 21)' }}>
+                              {placeholderCategory}
+                            </span>
+                            <span>{`\u00a0that feels\u00a0`}</span>
+                            <span className="font-semibold text-pink-400">
+                              {adjective1}
+                            </span>
+                            <span>{`\u00a0and\u00a0`}</span>
+                            <span className="font-semibold text-cyan-400">
+                              {adjective2}
+                            </span>
+                          </div>
                         </div>
                       )}
                       {currentInput.length > 0 && (
