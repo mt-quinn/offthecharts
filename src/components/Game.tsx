@@ -145,19 +145,28 @@ export function Game() {
     return [total1, total2];
   };
 
-  // Get a deterministic category for the current round based on daily seed (must be before early return)
+  // Get a category for the current round (deterministic for daily, random for debug-random)
   const placeholderCategory = useMemo(() => {
     if (!state || !currentTurn) return PLACEHOLDER_CATEGORIES[0];
     const roundIndex = currentTurn.roundIndex;
-    const dateKey = state.dateKey;
     
     // Check if we already have a category assigned for this round
     if (usedCategoriesRef.current.has(roundIndex)) {
       return usedCategoriesRef.current.get(roundIndex)!;
     }
     
-    // Deterministically select all 5 categories based on dateKey
-    // Use a simple hash function similar to pickDailyAdjectives
+    // For debug-random mode, use truly random selection
+    if (state.mode === "debug-random") {
+      const used = Array.from(usedCategoriesRef.current.values());
+      const available = PLACEHOLDER_CATEGORIES.filter(cat => !used.includes(cat));
+      const pool = available.length > 0 ? available : PLACEHOLDER_CATEGORIES;
+      const selected = pool[Math.floor(Math.random() * pool.length)];
+      usedCategoriesRef.current.set(roundIndex, selected);
+      return selected;
+    }
+    
+    // For daily mode, deterministically select all 5 categories based on dateKey
+    const dateKey = state.dateKey;
     let hash = 0;
     for (let i = 0; i < dateKey.length; i++) {
       hash = (hash * 31 + dateKey.charCodeAt(i)) >>> 0;
