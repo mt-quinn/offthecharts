@@ -285,7 +285,7 @@ export function Game() {
           noun: guess.noun,
           originalScore1: guess.scores[0],
           originalScore2: guess.scores[1],
-          originalReasoning: guess.reasoning ?? "",
+          originalReasoning: guess.reasonings ? `${guess.reasonings[0] || ""} | ${guess.reasonings[1] || ""}` : "",
           appealText: trimmed,
         }),
       });
