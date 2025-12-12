@@ -5,13 +5,13 @@ import { BASE_ADJECTIVES, pickDailyAdjectives } from "@/data/adjectives";
 
 export type GuessResult = {
   noun: string;
-  score?: number;
-  reasoning?: string;
+  scores?: [number, number]; // [score1, score2] for the two adjectives
+  reasonings?: [string, string]; // [reasoning1, reasoning2] - one explanation per adjective
   appealed?: boolean;
   // If this guess was appealed, how many points (if any)
   // were added by the appeal. 0 or undefined means the
-  // appeal did not change the score.
-  appealDelta?: number;
+  // appeal did not change the scores.
+  appealDelta?: [number, number]; // [delta1, delta2]
   isPass?: boolean;
 };
 
@@ -20,17 +20,13 @@ export type GameMode = "daily" | "debug-random";
 export type GameState = {
   mode: GameMode;
   dateKey: string; // YYYY-MM-DD for daily mode
-  adjectives: string[]; // always length 3
-  guesses: GuessResult[][]; // [categoryIndex][guessIndex] with 3 categories × 3 guesses
-  currentTurnIndex: number; // 0..8
+  adjectives: [string, string]; // exactly 2 adjectives
+  guesses: GuessResult[]; // 5 guesses for the single combined category
+  currentTurnIndex: number; // 0..4
   appealsRemaining: number; // starts at 1
-  // For each category, the index (0–2) of the answer the LLM considers
-  // the best overall when scores are tied. May be null/undefined if the
-  // LLM hasn't given a preference yet.
-  favoriteIndices?: (number | null)[];
 };
 
-const DAILY_STORAGE_KEY = "off-the-charts-game-v1";
+const DAILY_STORAGE_KEY = "off-the-charts-game-v2";
 
 // Bump this version to force a fresh daily puzzle for a given date.
 // Changing it changes both:
@@ -43,48 +39,49 @@ function todayKey() {
   return `${base}-v${DAILY_SEED_VERSION}`;
 }
 
-function emptyGuesses(): GuessResult[][] {
-  return Array.from({ length: 3 }, () =>
-    Array.from({ length: 3 }, () => ({ noun: "" })),
-  );
+function emptyGuesses(): GuessResult[] {
+  return Array.from({ length: 5 }, () => ({ noun: "" }));
 }
 
 function createNewDailyState(): GameState {
   const dateKey = todayKey();
-  const adjectives = pickDailyAdjectives(dateKey, 3, BASE_ADJECTIVES);
+  const selected = pickDailyAdjectives(dateKey, 2, BASE_ADJECTIVES);
+  if (selected.length !== 2) {
+    throw new Error("Expected exactly 2 adjectives");
+  }
   return {
     mode: "daily",
     dateKey,
-    adjectives,
+    adjectives: [selected[0], selected[1]],
     guesses: emptyGuesses(),
     currentTurnIndex: 0,
     appealsRemaining: 1,
-    favoriteIndices: [null, null, null],
   };
 }
 
 function reviveState(raw: unknown): GameState | null {
   if (!raw || typeof raw !== "object") return null;
   const value = raw as any;
-  if (!Array.isArray(value.adjectives) || value.adjectives.length !== 3)
-    return null;
-  if (!Array.isArray(value.guesses)) return null;
-  return {
-    mode: (value.mode as GameMode) || "daily",
-    dateKey: typeof value.dateKey === "string" ? value.dateKey : todayKey(),
-    adjectives: value.adjectives as string[],
-    guesses: value.guesses as GuessResult[][],
-    currentTurnIndex:
-      typeof value.currentTurnIndex === "number" ? value.currentTurnIndex : 0,
-    appealsRemaining:
-      typeof value.appealsRemaining === "number"
-        ? value.appealsRemaining
-        : 1,
-    favoriteIndices:
-      Array.isArray(value.favoriteIndices) && value.favoriteIndices.length === 3
-        ? (value.favoriteIndices as (number | null)[])
-        : [null, null, null],
-  };
+  // Support both old format (3 adjectives) and new format (2 adjectives)
+  if (!Array.isArray(value.adjectives)) return null;
+  if (value.adjectives.length === 2) {
+    // New format
+    if (!Array.isArray(value.guesses)) return null;
+    return {
+      mode: (value.mode as GameMode) || "daily",
+      dateKey: typeof value.dateKey === "string" ? value.dateKey : todayKey(),
+      adjectives: [value.adjectives[0], value.adjectives[1]] as [string, string],
+      guesses: value.guesses as GuessResult[],
+      currentTurnIndex:
+        typeof value.currentTurnIndex === "number" ? value.currentTurnIndex : 0,
+      appealsRemaining:
+        typeof value.appealsRemaining === "number"
+          ? value.appealsRemaining
+          : 1,
+    };
+  }
+  // Old format - reject it to force a new game
+  return null;
 }
 
 export function useDailyGameState() {
@@ -123,40 +120,33 @@ export function useDailyGameState() {
 
   const currentTurn = useMemo(() => {
     if (!state) return null;
-    const idx = Math.min(Math.max(state.currentTurnIndex, 0), 8);
-    // Category-major order: 0–2 = category 0, 3–5 = category 1, 6–8 = category 2
-    const categoryIndex = Math.floor(idx / 3); // 0,1,2
-    const guessIndex = idx % 3; // 0,1,2
-    return { idx, adjectiveIndex: categoryIndex, roundIndex: guessIndex };
+    const idx = Math.min(Math.max(state.currentTurnIndex, 0), 4);
+    return { idx, roundIndex: idx };
   }, [state]);
 
   const isComplete = useMemo(() => {
     if (!state) return false;
-    return state.currentTurnIndex >= 9;
+    return state.currentTurnIndex >= 5;
   }, [state]);
 
   const totalScore = useMemo(() => {
     if (!state) return 0;
-    // Only the single best answer per category counts.
-    return state.guesses.reduce((sum, row) => {
-      const best = row.reduce(
-        (max, g) => Math.max(max, g.score ?? 0),
-        0,
-      );
-      return sum + best;
+    // Best combined score (score1 + score2) across all guesses
+    return state.guesses.reduce((best, g) => {
+      if (!g.scores) return best;
+      const combined = g.scores[0] + g.scores[1];
+      return Math.max(best, combined);
     }, 0);
   }, [state]);
 
   const submitGuessLocally = useCallback(
-    (adjectiveIndex: number, roundIndex: number, noun: string) => {
+    (roundIndex: number, noun: string) => {
       setState((prev) => {
         if (!prev) return prev;
-        const guesses = prev.guesses.map((row, ai) =>
-          row.map((g, ri) =>
-            ai === adjectiveIndex && ri === roundIndex
-              ? { ...g, noun: noun.trim(), isPass: false }
-              : g,
-          ),
+        const guesses = prev.guesses.map((g, ri) =>
+          ri === roundIndex
+            ? { ...g, noun: noun.trim(), isPass: false }
+            : g,
         );
         return { ...prev, guesses };
       });
@@ -165,23 +155,20 @@ export function useDailyGameState() {
   );
 
   const submitPassLocally = useCallback(
-    (adjectiveIndex: number, roundIndex: number) => {
+    (roundIndex: number) => {
       setState((prev) => {
         if (!prev) return prev;
-        const guesses = prev.guesses.map((row, ai) =>
-          row.map((g, ri) => {
-            if (ai !== adjectiveIndex) return g;
-            // The explicit pass the player just chose
-            if (ri === roundIndex) {
-              return { ...g, noun: g.noun || "PASS", score: 0, isPass: true };
-            }
-            // Auto-pass any remaining unanswered rounds in this category
-            if (ri > roundIndex && !g.noun && !g.isPass) {
-              return { ...g, noun: "PASS", score: 0, isPass: true };
-            }
-            return g;
-          }),
-        );
+        const guesses = prev.guesses.map((g, ri) => {
+          // The explicit pass the player just chose
+          if (ri === roundIndex) {
+            return { ...g, noun: g.noun || "PASS", scores: [0, 0] as [number, number], isPass: true };
+          }
+          // Auto-pass any remaining unanswered rounds
+          if (ri > roundIndex && !g.noun && !g.isPass) {
+            return { ...g, noun: "PASS", scores: [0, 0] as [number, number], isPass: true };
+          }
+          return g;
+        });
         return { ...prev, guesses };
       });
     },
@@ -191,15 +178,15 @@ export function useDailyGameState() {
   const advanceTurn = useCallback(() => {
     setState((prev) => {
       if (!prev) return prev;
-      const maxTurns = 9;
+      const maxTurns = 5;
       let nextTurnIndex = prev.currentTurnIndex + 1;
+      // Skip locked guesses (perfect score 20 = 10+10)
       while (nextTurnIndex < maxTurns) {
-        const categoryIndex = Math.floor(nextTurnIndex / 3);
-        const isLockedCategory = prev.guesses[categoryIndex].some(
-          (g) => g.isPass || (g.score ?? 0) >= 10,
-        );
-        if (isLockedCategory) {
-          nextTurnIndex += 3 - (nextTurnIndex % 3); // skip remaining slots in this category
+        const guess = prev.guesses[nextTurnIndex];
+        const isLocked = guess?.isPass || 
+          (guess?.scores && guess.scores[0] + guess.scores[1] === 20);
+        if (isLocked) {
+          nextTurnIndex++;
           continue;
         }
         break;
@@ -211,70 +198,35 @@ export function useDailyGameState() {
 
   const applyScore = useCallback(
     (
-      adjectiveIndex: number,
       roundIndex: number,
-      score: number,
-      reasoning: string,
-      favoriteIndexForCategory?: number | null,
+      scores: [number, number],
+      reasonings: [string, string],
     ) => {
       setState((prev) => {
         if (!prev) return prev;
-        const guesses = prev.guesses.map((row, ai) =>
-          row.map((g, ri) =>
-            ai === adjectiveIndex && ri === roundIndex
-              ? { ...g, score, reasoning }
-              : g,
-          ),
+        const guesses = prev.guesses.map((g, ri) =>
+          ri === roundIndex
+            ? { ...g, scores, reasonings }
+            : g,
         );
 
-        // If a perfect 10/10 was achieved, auto-mark all remaining empty
-        // turns in this category as \"Perfect Score Achieved\" so they show
-        // up explicitly in the UI, similar to how PASS entries are shown.
-        if (score >= 10) {
-          const row = guesses[adjectiveIndex];
-          for (let i = 0; i < row.length; i++) {
-            if (i <= roundIndex) continue;
-            const g = row[i];
+        // If a perfect 20 (10+10) was achieved, auto-mark all remaining empty
+        // guesses as "Perfect Score Achieved" so they show up explicitly in the UI.
+        if (scores[0] === 10 && scores[1] === 10) {
+          for (let i = roundIndex + 1; i < guesses.length; i++) {
+            const g = guesses[i];
             if (!g.noun && !g.isPass) {
-              row[i] = {
+              guesses[i] = {
                 ...g,
                 noun: "Perfect Score Achieved",
-                score: 10,
+                scores: [10, 10] as [number, number],
                 isPass: true,
               };
             }
           }
         }
 
-        // Update the LLM-preferred best index for this category if provided.
-        let favoriteIndices = prev.favoriteIndices ?? [null, null, null];
-        if (typeof favoriteIndexForCategory === "number") {
-          const idx = Math.max(
-            0,
-            Math.min(2, Math.floor(favoriteIndexForCategory)),
-          );
-          favoriteIndices = [...favoriteIndices];
-          favoriteIndices[adjectiveIndex] = idx;
-        } else {
-          // Fallback: if no explicit favorite is provided, keep existing
-          // preference, or default to the earliest guess with the highest score.
-          const scores = guesses[adjectiveIndex].map((g) => g.score ?? 0);
-          const bestScore = Math.max(0, ...scores);
-          if (bestScore > 0) {
-            const firstBestIndex = scores.findIndex((s) => s === bestScore);
-            if (firstBestIndex >= 0) {
-              favoriteIndices = [...favoriteIndices];
-              if (
-                favoriteIndices[adjectiveIndex] == null ||
-                favoriteIndices[adjectiveIndex] < 0
-              ) {
-                favoriteIndices[adjectiveIndex] = firstBestIndex;
-              }
-            }
-          }
-        }
-
-        return { ...prev, guesses, favoriteIndices };
+        return { ...prev, guesses };
       });
     },
     [],
@@ -282,51 +234,34 @@ export function useDailyGameState() {
 
   const applyAppealResult = useCallback(
     (
-      adjectiveIndex: number,
       roundIndex: number,
-      newScore: number,
-      newReasoning: string,
+      newScores: [number, number],
+      newReasonings: [string, string],
       appealTokenConsumed: boolean,
-      favoriteIndexForCategory?: number | null,
     ) => {
       setState((prev) => {
         if (!prev) return prev;
-        const previousScore =
-          prev.guesses[adjectiveIndex]?.[roundIndex]?.score ?? 0;
-        const delta = Math.max(0, (newScore ?? previousScore) - previousScore);
+        const previousScores = prev.guesses[roundIndex]?.scores ?? [0, 0];
+        const delta: [number, number] = [
+          Math.max(0, newScores[0] - previousScores[0]),
+          Math.max(0, newScores[1] - previousScores[1]),
+        ];
 
-        const guesses = prev.guesses.map((row, ai) =>
-          row.map((g, ri) =>
-            ai === adjectiveIndex && ri === roundIndex
-              ? {
-                  ...g,
-                  score: newScore,
-                  reasoning: newReasoning,
-                  appealed: true,
-                  appealDelta: delta,
-                }
-              : g,
-          ),
+        const guesses = prev.guesses.map((g, ri) =>
+          ri === roundIndex
+            ? {
+                ...g,
+                scores: newScores,
+                reasonings: newReasonings,
+                appealed: true,
+                appealDelta: delta,
+              }
+            : g,
         );
         // Single appeal token for the whole game, always consumed when used.
         const appealsRemaining = Math.max(0, prev.appealsRemaining - 1);
 
-        // Optionally refresh the favorite index for this category after an appeal.
-        let favoriteIndices = prev.favoriteIndices ?? [null, null, null];
-        if (typeof favoriteIndexForCategory === "number") {
-          const idx = Math.max(
-            0,
-            Math.min(2, Math.floor(favoriteIndexForCategory)),
-          );
-          favoriteIndices = [...favoriteIndices];
-          favoriteIndices[adjectiveIndex] = idx;
-        } else {
-          // If no explicit favorite is provided, keep the existing preference
-          // and let numeric scores handle "best" in the UI when no tie exists.
-          favoriteIndices = [...favoriteIndices];
-        }
-
-        return { ...prev, guesses, appealsRemaining, favoriteIndices };
+        return { ...prev, guesses, appealsRemaining };
       });
     },
     [],
@@ -337,13 +272,16 @@ export function useDailyGameState() {
   }, []);
 
   const forceRandomDebugGame = useCallback(() => {
-    const adjectives = [...BASE_ADJECTIVES]
+    const selected = [...BASE_ADJECTIVES]
       .sort(() => Math.random() - 0.5)
-      .slice(0, 3);
+      .slice(0, 2);
+    if (selected.length !== 2) {
+      throw new Error("Expected exactly 2 adjectives");
+    }
     setState({
       mode: "debug-random",
       dateKey: todayKey(),
-      adjectives,
+      adjectives: [selected[0], selected[1]] as [string, string],
       guesses: emptyGuesses(),
       currentTurnIndex: 0,
       appealsRemaining: 1,

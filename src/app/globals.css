@@ -54,3 +54,38 @@ button,
 
 /* Avoid smooth scroll on the root so any programmatic scrollTo
    (e.g., when the keyboard opens) does not slowly pan the viewport. */
+
+/* Pillar fill animation */
+@keyframes pillarFill {
+  0% {
+    transform: scale(0.7);
+    opacity: 0.3;
+  }
+  40% {
+    transform: scale(1.15);
+    opacity: 0.9;
+  }
+  70% {
+    transform: scale(0.95);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.pillar-segment-filled {
+  transform: scale(1);
+}
+
+.pillar-segment-empty {
+  transform: scale(0.95);
+}
+
+.pillar-segment-animating {
+  animation: pillarFill 1s ease-out;
+}
+
+.pillar-segment-animating-fast {
+  animation: pillarFill 0.6s ease-out;
+}

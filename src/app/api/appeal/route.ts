@@ -4,17 +4,19 @@ import { DEFAULT_MODEL_ID, getOpenAIClient } from "@/lib/openai";
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as {
-      adjective?: string;
+      adjective1?: string;
+      adjective2?: string;
       noun?: string;
-      originalScore?: number;
+      originalScore1?: number;
+      originalScore2?: number;
       originalReasoning?: string;
       appealText?: string;
     };
 
-    const { adjective, noun, originalScore, originalReasoning, appealText } =
+    const { adjective1, adjective2, noun, originalScore1, originalScore2, originalReasoning, appealText } =
       body;
 
-    if (!adjective || !noun || !originalScore || !appealText) {
+    if (!adjective1 || !adjective2 || !noun || typeof originalScore1 !== "number" || typeof originalScore2 !== "number" || !appealText) {
       return NextResponse.json(
         { error: "Missing required appeal fields" },
         { status: 400 },
@@ -24,9 +26,11 @@ export async function POST(req: Request) {
     const openai = getOpenAIClient();
 
     const prompt = buildAppealPrompt(
-      adjective,
+      adjective1,
+      adjective2,
       noun,
-      originalScore,
+      originalScore1,
+      originalScore2,
       originalReasoning || "",
       appealText,
     );
@@ -39,19 +43,20 @@ export async function POST(req: Request) {
           content: prompt,
         },
       ],
-      max_completion_tokens: 220,
+      max_completion_tokens: 280,
       reasoning_effort:
         DEFAULT_MODEL_ID === "gpt-5.1-2025-11-13" ? ("none" as any) : "minimal",
       verbosity: "low",
     });
 
     const raw = response.choices[0]?.message?.content?.trim() ?? "";
-    const { newScore, reasoning, accepted } = parseAppealResponse(
+    const { newScore1, newScore2, reasoning1, reasoning2, accepted } = parseAppealResponse(
       raw,
-      originalScore,
+      originalScore1,
+      originalScore2,
     );
 
-    return NextResponse.json({ newScore, reasoning, accepted });
+    return NextResponse.json({ newScore1, newScore2, reasoning1, reasoning2, accepted });
   } catch (error) {
     console.error("Error in /api/appeal:", error);
     return NextResponse.json(
@@ -62,53 +67,71 @@ export async function POST(req: Request) {
 }
 
 function buildAppealPrompt(
-  adjective: string,
+  adjective1: string,
+  adjective2: string,
   noun: string,
-  originalScore: number,
+  originalScore1: number,
+  originalScore2: number,
   originalReasoning: string,
   appealText: string,
 ): string {
   return `You are the replay booth judge for a word-association game.
 
-Players are scored 1–10 on how well their ANSWER matches a CATEGORY. They may file a short text appeal if they think the score was unfair.
-Your job is to re-evaluate the score once, taking their appeal into account, and either keep the score or raise it. Never lower the score.
+Players are scored 1–10 on how well their ANSWER matches TWO CATEGORIES simultaneously. They may file a short text appeal if they think the scores were unfair.
+Your job is to re-evaluate BOTH scores once, taking their appeal into account, and either keep each score or raise it. Never lower a score.
 
-CATEGORY WORD: ${adjective}
+CATEGORY WORD 1: ${adjective1}
+CATEGORY WORD 2: ${adjective2}
 ANSWER: ${noun}
-ORIGINAL SCORE (1–10): ${originalScore}
+ORIGINAL SCORE 1 (1–10): ${originalScore1}
+ORIGINAL SCORE 2 (1–10): ${originalScore2}
 ORIGINAL REASONING: ${originalReasoning || "(none provided)"}
 PLAYER'S APPEAL (max 256 chars): ${appealText}
 
 Rules:
-- You may keep the score the same or increase it up to 10.
-- Only increase if the appeal surfaces a genuinely strong reason the answer fits the category better than you first judged.
+- You may keep each score the same or increase it up to 10, independently.
+- Only increase a score if the appeal surfaces a genuinely strong reason the answer fits that category better than you first judged.
 - Small improvements (e.g., +1–2) are fine when the appeal is modestly persuasive.
 - Larger jumps (e.g., +3 or more) should be rare and reserved for clearly misjudged but excellent answers.
-- Be conservative but fair; it's okay to say no.
+- Be conservative but fair; it's okay to say no to either or both increases.
+- Score each adjective independently; an appeal might only affect one of the two scores.
+
+You must provide TWO separate reasonings, one for each adjective:
+- reasoning1: A 1-2 sentence explanation for why the score for ADJECTIVE 1 is what it is (or why it didn't change).
+- reasoning2: A 1-2 sentence explanation for why the score for ADJECTIVE 2 is what it is (or why it didn't change).
+
+Each reasoning should focus ONLY on its respective adjective and the appeal's relevance to that specific category.
 
 Respond ONLY with strict JSON in this shape (no extra text, no commentary):
-{"newScore": <integer >= originalScore and <= 10>, "accepted": <true_if_score_increased_else_false>, "reasoning": "<1-2 short sentences summarizing your ruling>"}`.trim();
+{"newScore1": <integer >= originalScore1 and <= 10>, "newScore2": <integer >= originalScore2 and <= 10>, "accepted": <true_if_either_score_increased_else_false>, "reasoning1": "<1-2 short sentences for adjective1>", "reasoning2": "<1-2 short sentences for adjective2>"}`.trim();
 }
 
 function parseAppealResponse(
   raw: string,
-  originalScore: number,
-): { newScore: number; reasoning: string; accepted: boolean } {
+  originalScore1: number,
+  originalScore2: number,
+): { newScore1: number; newScore2: number; reasoning1: string; reasoning2: string; accepted: boolean } {
   // Try JSON parse first
   try {
     const parsed = JSON.parse(raw) as {
-      newScore?: number;
+      newScore1?: number;
+      newScore2?: number;
       accepted?: boolean;
-      reasoning?: string;
+      reasoning1?: string;
+      reasoning2?: string;
     };
 
-    if (typeof parsed.newScore === "number") {
-      const base = Math.max(originalScore, parsed.newScore);
-      const clamped = Math.min(10, Math.max(originalScore, Math.round(base)));
-      const accepted = clamped > originalScore || parsed.accepted === true;
+    if (typeof parsed.newScore1 === "number" && typeof parsed.newScore2 === "number") {
+      const base1 = Math.max(originalScore1, parsed.newScore1);
+      const base2 = Math.max(originalScore2, parsed.newScore2);
+      const clamped1 = Math.min(10, Math.max(originalScore1, Math.round(base1)));
+      const clamped2 = Math.min(10, Math.max(originalScore2, Math.round(base2)));
+      const accepted = clamped1 > originalScore1 || clamped2 > originalScore2 || parsed.accepted === true;
       return {
-        newScore: clamped,
-        reasoning: parsed.reasoning?.toString() || "",
+        newScore1: clamped1,
+        newScore2: clamped2,
+        reasoning1: parsed.reasoning1?.toString() || "",
+        reasoning2: parsed.reasoning2?.toString() || "",
         accepted,
       };
     }
@@ -116,14 +139,20 @@ function parseAppealResponse(
     // ignore and fall through
   }
 
-  const match = raw.match(/"newScore"\s*:\s*(\d)/i);
-  const numeric = match ? Number(match[1]) : originalScore;
-  const clamped = Math.min(10, Math.max(originalScore, Math.round(numeric)));
+  // Fallback regex parsing
+  const match1 = raw.match(/"newScore1"\s*:\s*(\d)/i);
+  const match2 = raw.match(/"newScore2"\s*:\s*(\d)/i);
+  const numeric1 = match1 ? Number(match1[1]) : originalScore1;
+  const numeric2 = match2 ? Number(match2[1]) : originalScore2;
+  const clamped1 = Math.min(10, Math.max(originalScore1, Math.round(numeric1)));
+  const clamped2 = Math.min(10, Math.max(originalScore2, Math.round(numeric2)));
 
-  const reasoningMatch = raw.match(/"reasoning"\s*:\s*"([\s\S]*?)"\s*}?$/i);
-  const reasoning = reasoningMatch ? reasoningMatch[1] : raw;
+  const reasoning1Match = raw.match(/"reasoning1"\s*:\s*"([\s\S]*?)"/i);
+  const reasoning2Match = raw.match(/"reasoning2"\s*:\s*"([\s\S]*?)"/i);
+  const reasoning1 = reasoning1Match ? reasoning1Match[1] : "";
+  const reasoning2 = reasoning2Match ? reasoning2Match[1] : "";
 
-  const accepted = clamped > originalScore;
+  const accepted = clamped1 > originalScore1 || clamped2 > originalScore2;
 
-  return { newScore: clamped, reasoning, accepted };
+  return { newScore1: clamped1, newScore2: clamped2, reasoning1, reasoning2, accepted };
 }

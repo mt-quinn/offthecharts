@@ -4,17 +4,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { GuessResult, useDailyGameState } from "@/hooks/useDailyGameState";
 
 type ScoreResponse = {
-  score: number;
-  reasoning: string;
-  // Optional index (0–2) of the answer the LLM considers
-  // the best overall for this adjective so far, among all
-  // answers in this category.
-  favoriteIndex?: number | null;
+  score1: number;
+  score2: number;
+  reasoning1: string;
+  reasoning2: string;
 };
 
 type AppealResponse = {
-  newScore: number;
-  reasoning: string;
+  newScore1: number;
+  newScore2: number;
+  reasoning1: string;
+  reasoning2: string;
   accepted?: boolean;
 };
 
@@ -39,16 +39,20 @@ export function Game() {
   const [error, setError] = useState<string | null>(null);
   const [awaitingNextCategory, setAwaitingNextCategory] = useState(false);
 
-  const [appealOpenFor, setAppealOpenFor] = useState<
-    | { adjectiveIndex: number; roundIndex: number }
-    | null
-  >(null);
+  const [appealOpenFor, setAppealOpenFor] = useState<number | null>(null);
   const [appealText, setAppealText] = useState("");
   const [appealSubmitting, setAppealSubmitting] = useState(false);
   const [appealError, setAppealError] = useState<string | null>(null);
 
   // Reference to the main guess input so we can autofocus it
   const guessInputRef = useRef<HTMLInputElement | null>(null);
+  // Reference to the category display to measure its bottom for pillar positioning
+  const categoryRef = useRef<HTMLElement | null>(null);
+  const [categoryBottom, setCategoryBottom] = useState<number>(140);
+  // Track if first score has been received (triggers pillar appearance and fill animation)
+  const [firstScoreReceived, setFirstScoreReceived] = useState(false);
+  // Track if initial fill animation is in progress
+  const [isInitialFill, setIsInitialFill] = useState(false);
 
   // Temporarily force debug tools on in all builds (including production)
   // so they are available while testing.
@@ -65,8 +69,8 @@ export function Game() {
     const isSameTurn = lastTurnIdxRef.current === currentTurn.idx;
     lastTurnIdxRef.current = currentTurn.idx;
 
-    const { adjectiveIndex, roundIndex } = currentTurn;
-    const guess = state.guesses[adjectiveIndex]?.[roundIndex];
+    const { roundIndex } = currentTurn;
+    const guess = state.guesses[roundIndex];
     setCurrentInput(guess?.noun ?? "");
     setError(null);
 
@@ -86,6 +90,40 @@ export function Game() {
     }
   }, [state, currentTurn, awaitingNextCategory]);
 
+  // Measure category section bottom for pillar positioning
+  useEffect(() => {
+    if (!categoryRef.current) return;
+    const updatePosition = () => {
+      const rect = categoryRef.current?.getBoundingClientRect();
+      const parentRect = categoryRef.current?.offsetParent?.getBoundingClientRect();
+      if (rect && parentRect) {
+        setCategoryBottom(rect.bottom - parentRect.top);
+      }
+    };
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    return () => window.removeEventListener('resize', updatePosition);
+  }, [state, isComplete, awaitingNextCategory]);
+
+  // Track score changes for animation (must be before early return)
+  const getBestScoresForAnimation = (): [number, number] => {
+    if (!state) return [0, 0];
+    const combinedScores = state.guesses.map((g) => {
+      if (!g.scores) return 0;
+      return g.scores[0] + g.scores[1];
+    });
+    const bestScore = Math.max(0, ...combinedScores);
+    if (bestScore <= 0) return [0, 0];
+    const candidateIndices = combinedScores
+      .map((_, i) => i)
+      .filter((i) => combinedScores[i] === bestScore && !state.guesses[i].isPass);
+    if (candidateIndices.length === 0) return [0, 0];
+    const bestGuess = state.guesses[candidateIndices[0]];
+    if (!bestGuess.scores) return [0, 0];
+    return [bestGuess.scores[0], bestGuess.scores[1]];
+  };
+
+
   const handleSubmitGuess = async () => {
     if (!state || !currentTurn || submitting || awaitingNextCategory) return;
     const trimmed = currentInput.trim();
@@ -94,36 +132,41 @@ export function Game() {
       return;
     }
 
-    const { adjectiveIndex, roundIndex } = currentTurn;
-    const adjective = state.adjectives[adjectiveIndex];
+    const { roundIndex } = currentTurn;
+    const [adjective1, adjective2] = state.adjectives;
 
-    // Ban answers that essentially just repeat the category word:
-    // - exactly the same as the adjective
+    // Ban answers that essentially just repeat either category word:
+    // - exactly the same as either adjective
     // - or differ only by adding/removing up to 2 characters at either end
-    const normalizedAdjective = adjective.trim().toLowerCase();
+    const normalized1 = adjective1.trim().toLowerCase();
+    const normalized2 = adjective2.trim().toLowerCase();
     const normalizedAnswer = trimmed.toLowerCase();
-    const lengthDiff = Math.abs(
-      normalizedAnswer.length - normalizedAdjective.length,
-    );
-    const sharesPrefix =
-      normalizedAnswer.startsWith(normalizedAdjective) ||
-      normalizedAdjective.startsWith(normalizedAnswer);
+    const lengthDiff1 = Math.abs(normalizedAnswer.length - normalized1.length);
+    const lengthDiff2 = Math.abs(normalizedAnswer.length - normalized2.length);
+    const sharesPrefix1 =
+      normalizedAnswer.startsWith(normalized1) ||
+      normalized1.startsWith(normalizedAnswer);
+    const sharesPrefix2 =
+      normalizedAnswer.startsWith(normalized2) ||
+      normalized2.startsWith(normalizedAnswer);
     const isForbiddenCategoryEcho =
-      normalizedAnswer === normalizedAdjective ||
-      (sharesPrefix && lengthDiff <= 2);
+      normalizedAnswer === normalized1 ||
+      normalizedAnswer === normalized2 ||
+      (sharesPrefix1 && lengthDiff1 <= 2) ||
+      (sharesPrefix2 && lengthDiff2 <= 2);
     if (isForbiddenCategoryEcho) {
       setError("You can't just submit the category as your guess.");
       return;
     }
 
-    // Block exact duplicate answers for the same category in this game
-    const priorAnswersForCategory = state.guesses[adjectiveIndex]
+    // Block exact duplicate answers in this game
+    const priorAnswers = state.guesses
       .slice(0, roundIndex)
       .filter((g) => !g.isPass)
       .map((g) => g.noun.trim().toLowerCase())
       .filter(Boolean);
-    if (priorAnswersForCategory.includes(trimmed.toLowerCase())) {
-      setError("You've already used that answer for this category. Try a new one.");
+    if (priorAnswers.includes(trimmed.toLowerCase())) {
+      setError("You've already used that answer. Try a new one.");
       return;
     }
 
@@ -131,7 +174,7 @@ export function Game() {
     setSubmitting(true);
 
     try {
-      const previousNouns = state.guesses[adjectiveIndex]
+      const previousNouns = state.guesses
         .slice(0, roundIndex)
         .map((g) => g.noun)
         .filter(Boolean);
@@ -140,7 +183,8 @@ export function Game() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          adjective,
+          adjective1,
+          adjective2,
           noun: trimmed,
           previousNouns,
         }),
@@ -151,26 +195,33 @@ export function Game() {
       }
 
       const data = (await res.json()) as ScoreResponse;
-      submitGuessLocally(adjectiveIndex, roundIndex, trimmed);
-      if (typeof data.score === "number") {
+      submitGuessLocally(roundIndex, trimmed);
+      if (typeof data.score1 === "number" && typeof data.score2 === "number") {
+        // Mark that first score has been received (triggers pillar appearance)
+        if (!firstScoreReceived) {
+          setFirstScoreReceived(true);
+          // Start initial fill animation after pillars have appeared
+          // Don't reset isInitialFill - let it stay true so the fill stays
+          setTimeout(() => {
+            setIsInitialFill(true);
+          }, 300);
+        }
+        
         applyScore(
-          adjectiveIndex,
           roundIndex,
-          data.score,
-          data.reasoning,
-          data.favoriteIndex ?? null,
+          [data.score1, data.score2],
+          [data.reasoning1 || "", data.reasoning2 || ""],
         );
 
-        // If the model gives a perfect 10/10, treat the category as finished:
-        // show the \"Next round\" / \"See results\" phase instead of
-        // auto-advancing immediately.
-        if (data.score >= 10) {
+        // If the model gives a perfect 20 (10+10), treat the game as finished:
+        // show the \"See results\" phase instead of auto-advancing immediately.
+        if (data.score1 === 10 && data.score2 === 10) {
           setAwaitingNextCategory(true);
           return;
         }
       }
 
-      if (roundIndex < 2) {
+      if (roundIndex < 4) {
         advanceTurn();
       } else {
         setAwaitingNextCategory(true);
@@ -178,8 +229,8 @@ export function Game() {
     } catch (e) {
       console.error(e);
       // Still record the guess locally so the game can progress
-      submitGuessLocally(adjectiveIndex, roundIndex, trimmed);
-      if (roundIndex < 2) {
+      submitGuessLocally(roundIndex, trimmed);
+      if (roundIndex < 4) {
         advanceTurn();
       } else {
         setAwaitingNextCategory(true);
@@ -192,8 +243,8 @@ export function Game() {
     }
   };
 
-  const openAppeal = (adjectiveIndex: number, roundIndex: number) => {
-    setAppealOpenFor({ adjectiveIndex, roundIndex });
+  const openAppeal = (roundIndex: number) => {
+    setAppealOpenFor(roundIndex);
     setAppealText("");
     setAppealError(null);
   };
@@ -205,10 +256,10 @@ export function Game() {
   };
 
   const submitAppeal = async () => {
-    if (!state || !appealOpenFor) return;
-    const { adjectiveIndex, roundIndex } = appealOpenFor;
-    const guess = state.guesses[adjectiveIndex]?.[roundIndex];
-    if (!guess || guess.appealed || !guess.score) return;
+    if (!state || appealOpenFor === null) return;
+    const roundIndex = appealOpenFor;
+    const guess = state.guesses[roundIndex];
+    if (!guess || guess.appealed || !guess.scores) return;
 
     const trimmed = appealText.trim();
     if (!trimmed) {
@@ -224,14 +275,16 @@ export function Game() {
     setAppealError(null);
 
     try {
-      const adjective = state.adjectives[adjectiveIndex];
+      const [adjective1, adjective2] = state.adjectives;
       const res = await fetch("/api/appeal", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          adjective,
+          adjective1,
+          adjective2,
           noun: guess.noun,
-          originalScore: guess.score,
+          originalScore1: guess.scores[0],
+          originalScore2: guess.scores[1],
           originalReasoning: guess.reasoning ?? "",
           appealText: trimmed,
         }),
@@ -242,21 +295,28 @@ export function Game() {
       }
 
       const data = (await res.json()) as AppealResponse;
-      const newScore =
-        typeof data.newScore === "number" && data.newScore > 0
-          ? data.newScore
-          : guess.score;
-      const newReasoning = data.reasoning || guess.reasoning || "";
+      const newScores: [number, number] = [
+        typeof data.newScore1 === "number" && data.newScore1 > 0
+          ? data.newScore1
+          : guess.scores[0],
+        typeof data.newScore2 === "number" && data.newScore2 > 0
+          ? data.newScore2
+          : guess.scores[1],
+      ];
+      const newReasonings: [string, string] = [
+        data.reasoning1 || guess.reasonings?.[0] || "",
+        data.reasoning2 || guess.reasonings?.[1] || "",
+      ];
 
-      const accepted = data.accepted ?? newScore > (guess.score ?? 0);
+      const accepted = data.accepted ?? 
+        (newScores[0] > guess.scores[0] || 
+        newScores[1] > guess.scores[1]);
 
       applyAppealResult(
-        adjectiveIndex,
         roundIndex,
-        newScore ?? guess.score,
-        newReasoning,
+        newScores,
+        newReasonings,
         !accepted,
-        null,
       );
       setAppealOpenFor(null);
       setAppealText("");
@@ -281,47 +341,115 @@ export function Game() {
     );
   }
 
-  const { adjectiveIndex, roundIndex } = currentTurn;
-  const adjective = state.adjectives[adjectiveIndex];
+  const { roundIndex } = currentTurn;
+  const [adjective1, adjective2] = state.adjectives;
 
-  const previousRoundsForThisAdjective = state.guesses[adjectiveIndex]
+  const previousGuesses = state.guesses
     // Include the current guess slot as \"previous\" once it has a noun,
-    // so that after the 3rd answer is scored it's visible during the
-    // \"Next round\" waiting state.
+    // so that after the 5th answer is scored it's visible during the
+    // \"See results\" waiting state.
     .slice(0, roundIndex + 1)
     .filter((g) => g.noun);
 
-  const currentGuess = state.guesses[adjectiveIndex][roundIndex];
+  const currentGuess = state.guesses[roundIndex];
 
-  const getBestIndexForCategory = (
-    guesses: GuessResult[],
-    favoriteIndex: number | null | undefined,
-  ): number => {
-    const scores = guesses.map((g) => g.score ?? 0);
-    const bestScore = Math.max(0, ...scores);
+  const getBestIndex = (guesses: GuessResult[]): number => {
+    const combinedScores = guesses.map((g) => {
+      if (!g.scores) return 0;
+      return g.scores[0] + g.scores[1];
+    });
+    const bestScore = Math.max(0, ...combinedScores);
     if (bestScore <= 0) return -1;
 
-    const candidateIndices = scores
+    const candidateIndices = combinedScores
       .map((_, i) => i)
-      .filter((i) => scores[i] === bestScore && !guesses[i].isPass);
+      .filter((i) => combinedScores[i] === bestScore && !guesses[i].isPass);
     if (candidateIndices.length === 0) return -1;
-
-    if (
-      typeof favoriteIndex === "number" &&
-      candidateIndices.includes(favoriteIndex)
-    ) {
-      return favoriteIndex;
-    }
 
     return candidateIndices[0];
   };
 
-  const currentRoundMax = isComplete
-    ? 30
-    : Math.min(30, (adjectiveIndex + 1) * 10);
+  const getBestScores = (): [number, number] => {
+    if (!state) return [0, 0];
+    const bestIndex = getBestIndex(state.guesses);
+    if (bestIndex < 0) return [0, 0];
+    const bestGuess = state.guesses[bestIndex];
+    if (!bestGuess.scores) return [0, 0];
+    return [bestGuess.scores[0], bestGuess.scores[1]];
+  };
+
+  const currentRoundMax = 20;
+  const [bestScore1, bestScore2] = getBestScores();
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col relative">
+      {/* Score pillars on either side */}
+      {firstScoreReceived && (
+        <>
+          <div className="absolute left-2 bottom-6 w-3 pointer-events-none pt-2 overflow-hidden rounded" style={{ top: `${categoryBottom}px`, height: `calc(100% - ${categoryBottom}px - 1.5rem)` }}>
+            {/* Segments with fill animation */}
+            <div className="h-full flex flex-col-reverse gap-0.5">
+              {Array.from({ length: 10 }, (_, i) => {
+                const shouldFill = i < bestScore1;
+                // With flex-col-reverse, i=0 appears at bottom, i=9 appears at top
+                // So delay should be i * 0.18 to fill from bottom to top
+                const fillDelay = isInitialFill && bestScore1 > 0 ? (i * 0.18) : 0;
+                const fillHeight = isInitialFill && shouldFill ? '100%' : '0%';
+                
+                return (
+                  <div
+                    key={i}
+                    className="w-full flex-1 rounded relative overflow-hidden"
+                    style={{
+                      backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                    }}
+                  >
+                    {/* Fill segment - animates from bottom to top */}
+                    <div
+                      className="absolute bottom-0 left-0 right-0 bg-pink-400 shadow-[0_0_4px_rgba(244,114,182,0.6)] rounded"
+                      style={{
+                        height: fillHeight,
+                        transition: isInitialFill && shouldFill ? `height 0.2s linear ${fillDelay}s` : 'none',
+                      }}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div className="absolute right-2 bottom-6 w-3 pointer-events-none pt-2 overflow-hidden rounded" style={{ top: `${categoryBottom}px`, height: `calc(100% - ${categoryBottom}px - 1.5rem)` }}>
+            {/* Segments with fill animation */}
+            <div className="h-full flex flex-col-reverse gap-0.5">
+              {Array.from({ length: 10 }, (_, i) => {
+                const shouldFill = i < bestScore2;
+                // With flex-col-reverse, i=0 appears at bottom, i=9 appears at top
+                // So delay should be i * 0.18 to fill from bottom to top
+                const fillDelay = isInitialFill && bestScore2 > 0 ? (i * 0.18) : 0;
+                const fillHeight = isInitialFill && shouldFill ? '100%' : '0%';
+                
+                return (
+                  <div
+                    key={i}
+                    className="w-full flex-1 rounded relative overflow-hidden"
+                    style={{
+                      backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                    }}
+                  >
+                    {/* Fill segment - animates from bottom to top */}
+                    <div
+                      className="absolute bottom-0 left-0 right-0 bg-cyan-400 shadow-[0_0_4px_rgba(34,211,238,0.6)] rounded"
+                      style={{
+                        height: fillHeight,
+                        transition: isInitialFill && shouldFill ? `height 0.2s linear ${fillDelay}s` : 'none',
+                      }}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
       {isDebug && (
         <div className="px-3 pt-2 pb-1 text-[0.6rem] text-otc-muted flex items-center justify-between gap-2">
           <span className="uppercase tracking-[0.2em]">Debug</span>
@@ -344,7 +472,7 @@ export function Game() {
         </div>
       )}
 
-      <header className="px-4 pt-2 pb-2">
+      <header className="px-8 pt-2 pb-2">
         <div className="flex items-center justify-between gap-3">
           <div className="flex-1 min-w-0">
             <div className="text-[0.6rem] tracking-[0.35em] uppercase text-otc-muted">
@@ -365,70 +493,74 @@ export function Game() {
       </header>
 
       {!isComplete && awaitingNextCategory && (
-        <div className="px-4 pb-1.5">
+        <div className="px-8 pb-1.5">
           <button
             type="button"
             onClick={() => {
               setAwaitingNextCategory(false);
-              advanceTurn();
+              if (roundIndex < 4) {
+                advanceTurn();
+              }
             }}
             className="w-full inline-flex items-center justify-center rounded-full bg-gradient-to-r from-otc-accent-strong to-otc-accent-alt px-4 py-2 text-sm font-semibold text-black shadow-otc-glow"
           >
-            {adjectiveIndex === state.adjectives.length - 1
-              ? "See results"
-              : "Next round"}
+            {roundIndex >= 4 ? "See results" : "Continue"}
           </button>
         </div>
       )}
 
-      <div className="flex-1 flex flex-col px-3 pb-3 gap-2.5 overflow-y-auto">
+      {!isComplete && (
+        <div className="px-7">
+          <section 
+            ref={categoryRef}
+            className="px-3 py-2 rounded-xl bg-black/20 border border-white/10 shadow-inner flex flex-col gap-1.5 items-center"
+          >
+            <div className="mt-0.5 text-[0.8rem] sm:text-sm font-semibold text-otc-muted text-center">
+              Submit a word, phrase, person, or concept that is
+            </div>
+            <div className="mt-0.5 font-display text-xl sm:text-2xl drop-shadow-otc-glow text-center">
+              <span className="text-pink-400">{adjective1.toUpperCase()}</span>
+              <span style={{ color: 'rgb(255, 179, 21)' }}> & </span>
+              <span className="text-cyan-400">{adjective2.toUpperCase()}</span>
+            </div>
+          </section>
+        </div>
+      )}
+
+      <div className={`flex-1 flex flex-col px-7 pb-3 gap-2.5 overflow-y-auto ${!isComplete && previousGuesses.length === 0 ? 'pt-4' : ''}`}>
         {!isComplete && (
           <>
-            <section className="relative rounded-xl bg-black/20 border border-white/10 px-3 py-2.5 shadow-inner flex flex-col gap-1.5 items-center">
-              <div className="mt-0.5 text-[0.8rem] sm:text-sm font-semibold text-otc-muted text-center">
-                Submit a word, phrase, person, or concept that is
-              </div>
-              <div className="mt-0.5 font-display text-2xl sm:text-3xl text-otc-accent-strong drop-shadow-otc-glow text-center">
-                {adjective.toUpperCase()}
-              </div>
-              <div className="absolute bottom-1 right-3 text-[0.7rem] sm:text-xs font-medium text-otc-muted tracking-[0.16em] uppercase">
-                Round {adjectiveIndex + 1} of 3
-              </div>
-            </section>
 
-            <section className="rounded-xl bg-otc-bg-soft/80 border border-white/5 px-3 py-3 flex flex-col gap-2.5">
-              {previousRoundsForThisAdjective.length > 0 && (
-                <div className="space-y-1">
-                  <div className="text-xs sm:text-sm tracking-[0.25em] uppercase text-otc-accent-alt font-semibold text-center">
-                    Category Scoreboard
+            <section className="rounded-xl bg-otc-bg-soft/80 border border-white/5 px-3 py-2 flex flex-col gap-2">
+              {previousGuesses.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="text-xs tracking-[0.25em] uppercase text-otc-accent-alt font-semibold text-center">
+                    Scoreboard
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-1.5">
                     {(() => {
-                      const guessesForCategory = state.guesses[adjectiveIndex];
-                      const favoriteIndex =
-                        state.favoriteIndices?.[adjectiveIndex] ?? null;
-                      const bestIndex = getBestIndexForCategory(
-                        guessesForCategory,
-                        favoriteIndex,
-                      );
-                      return previousRoundsForThisAdjective.map((g, idx) => (
-                        <PreviousGuessRow
-                          key={`${adjectiveIndex}-${idx}`}
-                          roundLabel={`Guess ${idx + 1}`}
-                          guess={g}
-                          adjectiveIndex={adjectiveIndex}
-                          roundIndex={idx}
-                          onAppeal={openAppeal}
-                          appealsRemaining={0}
-                          canAppealNow={false}
-                          isBest={
-                            previousRoundsForThisAdjective.length >= 2 &&
-                            bestIndex === idx &&
-                            (g.score ?? 0) > 0 &&
-                            !g.isPass
-                          }
-                        />
-                      ));
+                      const bestIndex = getBestIndex(state.guesses);
+                      return previousGuesses.map((g, idx) => {
+                        const combinedScore = g.scores ? g.scores[0] + g.scores[1] : 0;
+                        return (
+                          <PreviousGuessRow
+                            key={idx}
+                            roundLabel={`Guess ${idx + 1}`}
+                            guess={g}
+                            roundIndex={idx}
+                            adjectives={state.adjectives}
+                            onAppeal={openAppeal}
+                            appealsRemaining={0}
+                            canAppealNow={false}
+                            isBest={
+                              previousGuesses.length >= 2 &&
+                              bestIndex === idx &&
+                              combinedScore > 0 &&
+                              !g.isPass
+                            }
+                          />
+                        );
+                      });
                     })()}
                   </div>
                 </div>
@@ -463,45 +595,15 @@ export function Game() {
                       />
                       {!currentInput && !submitting && (
                         <div className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-otc-muted">
-                          {roundIndex === 0 && (
-                            <>
-                              <span>{`Try a\u00a0`}</span>
-                              <span className="font-semibold text-otc-accent-strong">
-                                Concept
-                              </span>
-                              <span>{`\u00a0that feels\u00a0`}</span>
-                              <span className="font-semibold text-otc-accent">
-                                {adjective}
-                              </span>
-                              <span>{`\u00a0to you`}</span>
-                            </>
-                          )}
-                          {roundIndex === 1 && (
-                            <>
-                              <span>{`Try a\u00a0`}</span>
-                              <span className="font-semibold text-otc-accent-strong">
-                                Person
-                              </span>
-                              <span>{`\u00a0that feels\u00a0`}</span>
-                              <span className="font-semibold text-otc-accent">
-                                {adjective}
-                              </span>
-                              <span>{`\u00a0to you`}</span>
-                            </>
-                          )}
-                          {roundIndex === 2 && (
-                            <>
-                              <span>{`Try a\u00a0`}</span>
-                              <span className="font-semibold text-otc-accent-strong">
-                                Whole Sentence
-                              </span>
-                              <span>{`\u00a0that feels\u00a0`}</span>
-                              <span className="font-semibold text-otc-accent">
-                                {adjective}
-                              </span>
-                              <span>{`\u00a0to you`}</span>
-                            </>
-                          )}
+                          <span>{`Try something that feels\u00a0`}</span>
+                          <span className="font-semibold text-otc-accent">
+                            {adjective1}
+                          </span>
+                          <span>{`\u00a0and\u00a0`}</span>
+                          <span className="font-semibold text-otc-accent">
+                            {adjective2}
+                          </span>
+                          <span>{`\u00a0to you`}</span>
                         </div>
                       )}
                       <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[0.7rem] text-otc-muted/70">
@@ -523,15 +625,15 @@ export function Game() {
                     >
                       {submitting
                         ? "Scoring…"
-                        : `Submit for Judgement (${roundIndex + 1}/3)`}
+                        : `Submit for Judgement (${roundIndex + 1}/5)`}
                     </button>
-                    {previousRoundsForThisAdjective.length > 0 && (
+                    {previousGuesses.length > 0 && (
                       <button
                         type="button"
                         onClick={() => {
                           if (!state || !currentTurn || submitting) return;
-                          const { adjectiveIndex, roundIndex } = currentTurn;
-                          submitPassLocally(adjectiveIndex, roundIndex);
+                          const { roundIndex } = currentTurn;
+                          submitPassLocally(roundIndex);
                           setAwaitingNextCategory(true);
                         }}
                         className="inline-flex items-center justify-center rounded-full border border-white/25 px-3 py-1.5 text-[0.7rem] font-semibold text-otc-muted bg-black/40 hover:bg-black/60 transition"
@@ -554,7 +656,7 @@ export function Game() {
             </div>
             <div className="text-lg font-semibold">
               You scored <span className="text-otc-accent-alt">{totalScore}</span>
-              <span className="text-otc-muted text-sm"> / 30 possible points.</span>
+              <span className="text-otc-muted text-sm"> / 20 possible points.</span>
             </div>
             <div className="text-[0.8rem] sm:text-sm font-semibold text-center text-otc-accent-alt">
               That's a wrap! Scroll down to review the game and appeal your most
@@ -578,75 +680,53 @@ export function Game() {
               to the replay booth.
             </div>
             <div className="mt-2 space-y-2">
-              {state.adjectives.map((adj, ai) => {
-                const guessesForCategory = state.guesses[ai];
-                const scores = guessesForCategory.map((g) => g.score ?? 0);
-                const bestScore = Math.max(0, ...scores);
-                const favoriteIndex =
-                  state.favoriteIndices?.[ai] ?? null;
-                const bestIndex = getBestIndexForCategory(
-                  guessesForCategory,
-                  favoriteIndex,
-                );
-                const hasPerfect = guessesForCategory.some(
-                  (g) => (g.score ?? 0) >= 10 && !g.isPass,
-                );
-
-                return (
-                  <div
-                    key={adj + ai}
-                    className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 space-y-1.5"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[0.65rem] uppercase tracking-[0.18em] text-otc-muted">
-                          Category {ai + 1}
-                        </span>
-                        <span className="font-display text-base text-otc-accent">
-                          {adj.toUpperCase()}
-                        </span>
-                      </div>
-                      {bestScore > 0 && (
-                        <div className="text-[0.7rem] text-otc-accent-alt">
-                          Best: {bestScore} / 10
-                        </div>
-                      )}
-                    </div>
-                    <div className="mt-1 grid grid-cols-1 gap-1.5">
-                      {guessesForCategory.map((g, ri) => (
-                        <PreviousGuessRow
-                          key={`${ai}-${ri}`}
-                          roundLabel={`Guess ${ri + 1}`}
-                          guess={g}
-                          adjectiveIndex={ai}
-                          roundIndex={ri}
-                          onAppeal={openAppeal}
-                          appealsRemaining={state.appealsRemaining}
-                          canAppealNow={isComplete && !hasPerfect}
-                          isBest={
-                            ri === bestIndex && (g.score ?? 0) > 0 && !g.isPass
-                          }
-                        />
-                      ))}
-                    </div>
+              <div className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-display text-base text-otc-accent">
+                      {adjective1.toUpperCase()} & {adjective2.toUpperCase()}
+                    </span>
                   </div>
-                );
-              })}
+                  {totalScore > 0 && (
+                    <div className="text-[0.7rem] text-otc-accent-alt">
+                      Best: {totalScore} / 20
+                    </div>
+                  )}
+                </div>
+                <div className="mt-1 grid grid-cols-1 gap-1.5">
+                  {state.guesses.map((g, ri) => {
+                    const combinedScore = g.scores ? g.scores[0] + g.scores[1] : 0;
+                    const hasPerfect = state.guesses.some(
+                      (g) => g.scores && g.scores[0] === 10 && g.scores[1] === 10 && !g.isPass,
+                    );
+                    const bestIndex = getBestIndex(state.guesses);
+                    return (
+                      <PreviousGuessRow
+                        key={ri}
+                        roundLabel={`Guess ${ri + 1}`}
+                        guess={g}
+                        roundIndex={ri}
+                        adjectives={state.adjectives}
+                        onAppeal={openAppeal}
+                        appealsRemaining={state.appealsRemaining}
+                        canAppealNow={isComplete && !hasPerfect}
+                        isBest={
+                          ri === bestIndex && combinedScore > 0 && !g.isPass
+                        }
+                      />
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           </section>
         )}
       </div>
 
-      {appealOpenFor && (
+      {appealOpenFor !== null && (
         <AppealModal
-          guess={
-            state.guesses[appealOpenFor.adjectiveIndex][
-              appealOpenFor.roundIndex
-            ]
-          }
-          adjective={
-            state.adjectives[appealOpenFor.adjectiveIndex] ?? "this category"
-          }
+          guess={state.guesses[appealOpenFor]}
+          adjectives={state.adjectives}
           appealsRemaining={state.appealsRemaining}
           appealText={appealText}
           onAppealTextChange={setAppealText}
@@ -663,9 +743,9 @@ export function Game() {
 type PreviousGuessRowProps = {
   roundLabel: string;
   guess: GuessResult;
-  adjectiveIndex: number;
   roundIndex: number;
-  onAppeal: (adjectiveIndex: number, roundIndex: number) => void;
+  adjectives: [string, string];
+  onAppeal: (roundIndex: number) => void;
   appealsRemaining: number;
   canAppealNow?: boolean;
   isBest?: boolean;
@@ -674,22 +754,23 @@ type PreviousGuessRowProps = {
 function PreviousGuessRow({
   roundLabel,
   guess,
-  adjectiveIndex,
   roundIndex,
+  adjectives,
   onAppeal,
   appealsRemaining,
   canAppealNow = true,
   isBest = false,
 }: PreviousGuessRowProps) {
-  // Only treat true, original 10/10 answers as PERFECT.
+  // Only treat true, original 20 (10+10) answers as PERFECT.
   // Auto-filled \"Perfect Score Achieved\" rows are marked isPass and should
   // not get the PERFECT highlight pill.
-  const isPerfect = (guess.score ?? 0) >= 10 && !guess.isPass;
+  const combinedScore = guess.scores ? guess.scores[0] + guess.scores[1] : 0;
+  const isPerfect = guess.scores && guess.scores[0] === 10 && guess.scores[1] === 10 && !guess.isPass;
 
   const canAppeal =
     canAppealNow &&
     !guess.appealed &&
-    typeof guess.score === "number" &&
+    guess.scores &&
     appealsRemaining > 0 &&
     !guess.isPass &&
     !isPerfect;
@@ -701,16 +782,16 @@ function PreviousGuessRow({
 
   return (
     <div
-      className={`flex items-start justify-between gap-2 text-xs rounded-xl px-3 py-2 border ${containerHighlightClasses}`}
+      className={`rounded-lg px-2.5 py-1.5 border ${containerHighlightClasses}`}
     >
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-[0.65rem] uppercase tracking-[0.18em] text-otc-muted">
-            {roundLabel}
-          </span>
-          {typeof guess.score === "number" && !guess.isPass && (
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+          <div className="text-[0.8rem] font-medium text-otc-text break-words">
+            {guess.noun}
+          </div>
+          {guess.scores && !guess.isPass && (
             <span
-              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.65rem] ${
+              className={`inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[0.65rem] flex-shrink-0 ${
                 isPerfect
                   ? "bg-otc-accent-alt text-black shadow-otc-glow"
                   : isBest
@@ -718,55 +799,76 @@ function PreviousGuessRow({
                   : "bg-otc-accent/15 text-otc-accent-alt"
               }`}
             >
-              <span className="font-semibold">{guess.score}</span>
-              <span className="opacity-80">/10</span>
+              <span className="font-semibold">{combinedScore}</span>
+              <span className="opacity-80">/20</span>
               {isPerfect && (
-                <span className="uppercase tracking-[0.16em]">Perfect</span>
+                <span className="uppercase tracking-[0.16em] ml-0.5">Perfect</span>
               )}
               {!isPerfect && isBest && (
-                <span className="uppercase tracking-[0.16em]">Best</span>
+                <span className="uppercase tracking-[0.16em] ml-0.5">Best</span>
               )}
             </span>
           )}
           {guess.appealed && (
-            <span className="ml-1 text-[0.6rem] uppercase tracking-[0.18em] text-otc-muted">
+            <span className="text-[0.6rem] uppercase tracking-[0.18em] text-otc-muted flex-shrink-0">
               {(() => {
-                const delta = guess.appealDelta ?? 0;
-                if (delta > 0) {
-                  return `Appealed (+${delta})`;
+                const delta = guess.appealDelta;
+                if (delta && (delta[0] > 0 || delta[1] > 0)) {
+                  return `+${delta[0] + delta[1]}`;
                 }
-                return "Appealed (Rejected)";
+                return "Rejected";
               })()}
             </span>
           )}
         </div>
-        <div className="mt-0.5 text-[0.85rem] font-medium text-otc-text break-words">
-          {guess.noun}
-        </div>
-        {guess.reasoning && (
-          <div className="mt-0.5 text-[0.75rem] leading-snug font-semibold text-otc-muted whitespace-pre-wrap">
-            {guess.reasoning}
-          </div>
-        )}
-      </div>
-      <div className="flex flex-col items-end gap-1">
         {canAppeal && (
           <button
             type="button"
-            onClick={() => onAppeal(adjectiveIndex, roundIndex)}
-            className="rounded-full border border-otc-accent-alt/60 px-2 py-0.5 text-[0.65rem] text-otc-accent-alt bg-black/40 hover:bg-black/60 transition"
+            onClick={() => onAppeal(roundIndex)}
+            className="rounded-full border border-otc-accent-alt/60 px-1.5 py-0.5 text-[0.65rem] text-otc-accent-alt bg-black/40 hover:bg-black/60 transition flex-shrink-0"
           >
             Appeal
           </button>
         )}
       </div>
+
+      {guess.scores && guess.reasonings && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+          <div className="rounded bg-black/40 border border-white/10 px-2 py-1">
+            <div className="flex items-center justify-between mb-0.5">
+              <span className="text-[0.65rem] font-semibold text-pink-400 uppercase tracking-[0.1em]">
+                {adjectives[0]}
+              </span>
+              <span className="text-[0.75rem] font-bold text-otc-accent-strong">
+                {guess.scores[0]}/10
+              </span>
+            </div>
+            <div className="text-[0.65rem] leading-tight text-otc-muted">
+              {guess.reasonings[0]}
+            </div>
+          </div>
+          <div className="rounded bg-black/40 border border-white/10 px-2 py-1">
+            <div className="flex items-center justify-between mb-0.5">
+              <span className="text-[0.65rem] font-semibold text-otc-accent-alt uppercase tracking-[0.1em]">
+                {adjectives[1]}
+              </span>
+              <span className="text-[0.75rem] font-bold text-otc-accent-alt">
+                {guess.scores[1]}/10
+              </span>
+            </div>
+            <div className="text-[0.65rem] leading-tight text-otc-muted">
+              {guess.reasonings[1]}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 type AppealModalProps = {
   guess: GuessResult;
-  adjective: string;
+  adjectives: [string, string];
   appealsRemaining: number;
   appealText: string;
   onAppealTextChange: (value: string) => void;
@@ -778,7 +880,7 @@ type AppealModalProps = {
 
 function AppealModal({
   guess,
-  adjective,
+  adjectives,
   appealsRemaining,
   appealText,
   onAppealTextChange,
@@ -788,25 +890,53 @@ function AppealModal({
   error,
 }: AppealModalProps) {
   if (!guess) return null;
+  const [adjective1, adjective2] = adjectives;
+  const combinedScore = guess.scores ? guess.scores[0] + guess.scores[1] : 0;
 
   return (
     <div className="absolute inset-0 bg-black/60 flex items-center justify-center px-4 py-4">
-      <div className="w-full max-w-sm rounded-2xl bg-otc-bg-soft border border-otc-accent/40 shadow-otc-card px-4 py-3 space-y-2 text-sm">
+      <div className="w-full max-w-sm rounded-2xl bg-otc-bg-soft border border-otc-accent/40 shadow-otc-card px-4 py-3 space-y-2.5 text-sm">
         <div className="text-[0.7rem] tracking-[0.2em] uppercase text-otc-muted">
           Coach's challenge
         </div>
         <div className="text-base font-semibold">
           Appealing "{guess.noun}" for{" "}
-          <span className="text-otc-accent">{adjective}</span>
+          <span className="text-otc-accent">{adjective1}</span> &{" "}
+          <span className="text-otc-accent">{adjective2}</span>
         </div>
-        {typeof guess.score === "number" && (
+        {guess.scores && (
           <div className="text-[0.8rem] text-otc-muted">
-            Current score: <span className="font-semibold">{guess.score}/10</span>
+            Current combined score: <span className="font-semibold">{combinedScore}/20</span>
           </div>
         )}
-        {guess.reasoning && (
-          <div className="text-[0.85rem] font-semibold text-otc-muted">
-            Judge's take: {guess.reasoning}
+        {guess.scores && guess.reasonings && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div className="rounded-lg bg-black/40 border border-white/10 px-2.5 py-2">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[0.7rem] font-semibold text-pink-400 uppercase tracking-[0.1em]">
+                  {adjective1}
+                </span>
+                <span className="text-[0.8rem] font-bold text-otc-accent-strong">
+                  {guess.scores[0]}/10
+                </span>
+              </div>
+              <div className="text-[0.7rem] leading-snug text-otc-muted">
+                {guess.reasonings[0]}
+              </div>
+            </div>
+            <div className="rounded-lg bg-black/40 border border-white/10 px-2.5 py-2">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[0.7rem] font-semibold text-otc-accent-alt uppercase tracking-[0.1em]">
+                  {adjective2}
+                </span>
+                <span className="text-[0.8rem] font-bold text-otc-accent-alt">
+                  {guess.scores[1]}/10
+                </span>
+              </div>
+              <div className="text-[0.7rem] leading-snug text-otc-muted">
+                {guess.reasonings[1]}
+              </div>
+            </div>
           </div>
         )}
         <div className="text-[0.7rem] text-otc-muted">
