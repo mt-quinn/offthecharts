@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { GuessResult, useDailyGameState } from "@/hooks/useDailyGameState";
 
 type ScoreResponse = {
@@ -19,7 +19,6 @@ type AppealResponse = {
 };
 
 const PLACEHOLDER_CATEGORIES = [
-  "Concept",
   "Cultural Icon",
   "Whole Sentence",
   "Sports Team",
@@ -29,6 +28,7 @@ const PLACEHOLDER_CATEGORIES = [
   "Piece of Media",
   "Organization",
   "Piece of Technology",
+  "Product"
 ];
 
 export function Game() {
@@ -65,6 +65,23 @@ export function Game() {
   const prevCumulativeScoresRef = useRef<[number, number]>([0, 0]);
   // Track which placeholder categories have been used for each round
   const usedCategoriesRef = useRef<Map<number, string>>(new Map());
+  
+  // Particle system state
+  const [activeParticles, setActiveParticles] = useState<Array<{
+    id: string;
+    isPink: boolean;
+    segmentIndex: number;
+    startX: number;
+    startY: number;
+    endX: number;
+    endY: number;
+  }>>([]);
+  const [pendingTopBarUpdates, setPendingTopBarUpdates] = useState<Set<number>>(new Set());
+  const prevFilledSegmentsRef = useRef<[number, number]>([0, 0]); // Track previous filled segment counts
+  const leftPillarRef = useRef<HTMLDivElement | null>(null);
+  const rightPillarRef = useRef<HTMLDivElement | null>(null);
+  const topBarRef = useRef<HTMLDivElement | null>(null);
+  const particleTimeoutIdsRef = useRef<NodeJS.Timeout[]>([]);
 
   // Temporarily force debug tools on in all builds (including production)
   // so they are available while testing.
@@ -379,6 +396,174 @@ export function Game() {
     }
   };
 
+  // Calculate cumulative scores (sum of all guesses) - must be before early return
+  const getCumulativeScores = (): [number, number] => {
+    if (!state) return [0, 0];
+    let total1 = 0;
+    let total2 = 0;
+    state.guesses.forEach((guess) => {
+      if (guess.scores && !guess.isPass) {
+        total1 += guess.scores[0];
+        total2 += guess.scores[1];
+      }
+    });
+    return [total1, total2];
+  };
+
+  const [cumulativeScore1, cumulativeScore2] = getCumulativeScores();
+
+  // Calculate filled segments for each adjective
+  const getFilledSegments = (score: number): number => {
+    return Math.min(5, Math.floor(Math.min(score, 25) / 5));
+  };
+
+  const filledSegments1 = getFilledSegments(cumulativeScore1);
+  const filledSegments2 = getFilledSegments(cumulativeScore2);
+
+  // Calculate top bar score based on confirmed segments (only what particles have reached)
+  // For final score, use actual filled segments if game is complete and no particles are active
+  const getTopBarScore = (): number => {
+    if (isComplete && activeParticles.length === 0) {
+      // Game is complete and all particles have finished - use actual filled segments
+      return filledSegments1 + filledSegments2;
+    }
+    // During gameplay, only count confirmed segments
+    return pendingTopBarUpdates.size;
+  };
+
+  const topBarScore = getTopBarScore();
+
+  // Detect new segments and trigger particles - MUST be before early return
+  useEffect(() => {
+    if (!state || !leftPillarRef.current || !rightPillarRef.current || !topBarRef.current) {
+      // Update ref even if refs aren't ready to keep it in sync
+      const new1 = getFilledSegments(cumulativeScore1);
+      const new2 = getFilledSegments(cumulativeScore2);
+      prevFilledSegmentsRef.current = [new1, new2];
+      return;
+    }
+    
+    const [prev1, prev2] = prevFilledSegmentsRef.current;
+    const new1 = getFilledSegments(cumulativeScore1);
+    const new2 = getFilledSegments(cumulativeScore2);
+
+    if (new1 > prev1 || new2 > prev2) {
+      // Wait a bit for DOM to update, then calculate positions
+      const timeoutId = setTimeout(() => {
+        // Double-check refs are still available
+        if (!leftPillarRef.current || !rightPillarRef.current || !topBarRef.current) {
+          prevFilledSegmentsRef.current = [new1, new2];
+          return;
+        }
+        
+        // Clear any previous particle timeouts (shouldn't happen, but safety)
+        particleTimeoutIdsRef.current.forEach(id => clearTimeout(id));
+        particleTimeoutIdsRef.current = [];
+        
+        const particlesToAdd: Array<{
+          id: string;
+          isPink: boolean;
+          segmentIndex: number;
+          startX: number;
+          startY: number;
+          endX: number;
+          endY: number;
+        }> = [];
+
+        // Helper to get segment center position in pillar
+        const getPillarSegmentCenter = (pillarRef: React.RefObject<HTMLDivElement | null>, segmentIndex: number): { x: number; y: number } | null => {
+          if (!pillarRef.current) return null;
+          const pillar = pillarRef.current;
+          const segmentsContainer = pillar.firstElementChild as HTMLElement;
+          if (!segmentsContainer) return null;
+          const segments = segmentsContainer.children;
+          if (segments.length === 0) return null;
+          
+          // Segments are in reverse order (flex-col-reverse), so segmentIndex 0 is the last segment
+          const actualIndex = segments.length - 1 - segmentIndex;
+          const segment = segments[actualIndex] as HTMLElement;
+          if (!segment) return null;
+          
+          const segmentRect = segment.getBoundingClientRect();
+          return {
+            x: segmentRect.left + segmentRect.width / 2,
+            y: segmentRect.top + segmentRect.height / 2,
+          };
+        };
+
+        // Helper to get top bar segment center position
+        const getTopBarSegmentCenter = (segmentIndex: number): { x: number; y: number } | null => {
+          if (!topBarRef.current) return null;
+          const segmentsContainer = topBarRef.current;
+          const segments = segmentsContainer.children;
+          if (segments.length === 0) return null;
+          const segment = segments[segmentIndex] as HTMLElement;
+          if (!segment) return null;
+          
+          const segmentRect = segment.getBoundingClientRect();
+          return {
+            x: segmentRect.left + segmentRect.width / 2,
+            y: segmentRect.top + segmentRect.height / 2,
+          };
+        };
+
+        // Create particles for new segments in adjective1 (pink)
+        for (let i = prev1; i < new1; i++) {
+          const pillarPos = getPillarSegmentCenter(leftPillarRef, i);
+          const topBarPos = getTopBarSegmentCenter(i);
+          if (pillarPos && topBarPos) {
+            particlesToAdd.push({
+              id: `pink-${i}-${Date.now()}-${Math.random()}`,
+              isPink: true,
+              segmentIndex: i,
+              startX: pillarPos.x,
+              startY: pillarPos.y,
+              endX: topBarPos.x,
+              endY: topBarPos.y,
+            });
+          }
+        }
+
+        // Create particles for new segments in adjective2 (cyan)
+        for (let i = prev2; i < new2; i++) {
+          const pillarPos = getPillarSegmentCenter(rightPillarRef, i);
+          const topBarPos = getTopBarSegmentCenter(i + 5); // Cyan segments are 5-9 in top bar
+          if (pillarPos && topBarPos) {
+            particlesToAdd.push({
+              id: `cyan-${i}-${Date.now()}-${Math.random()}`,
+              isPink: false,
+              segmentIndex: i + 5, // Store as top bar index
+              startX: pillarPos.x,
+              startY: pillarPos.y,
+              endX: topBarPos.x,
+              endY: topBarPos.y,
+            });
+          }
+        }
+
+        // Add particles sequentially with delays (charge-up time + stagger)
+        particlesToAdd.forEach((particle, index) => {
+          const particleTimeoutId = setTimeout(() => {
+            setActiveParticles(prev => [...prev, particle]);
+          }, 400 + index * 300); // 400ms charge-up, then 300ms between each particle
+          particleTimeoutIdsRef.current.push(particleTimeoutId);
+        });
+
+        prevFilledSegmentsRef.current = [new1, new2];
+      }, 100); // Small delay to ensure DOM has updated
+
+      return () => {
+        clearTimeout(timeoutId);
+        // Clean up any particle timeouts that were scheduled
+        particleTimeoutIdsRef.current.forEach(id => clearTimeout(id));
+        particleTimeoutIdsRef.current = [];
+      };
+    } else {
+      // Update ref even if no new segments to keep it in sync
+      prevFilledSegmentsRef.current = [new1, new2];
+    }
+  }, [cumulativeScore1, cumulativeScore2, state]);
+
   if (!isLoaded || !state || !currentTurn) {
     return (
       <div className="h-full flex items-center justify-center bg-transparent">
@@ -420,40 +605,9 @@ export function Game() {
     return candidateIndices[0];
   };
 
-  // Calculate cumulative scores (sum of all guesses)
-  const getCumulativeScores = (): [number, number] => {
-    if (!state) return [0, 0];
-    let total1 = 0;
-    let total2 = 0;
-    state.guesses.forEach((guess) => {
-      if (guess.scores && !guess.isPass) {
-        total1 += guess.scores[0];
-        total2 += guess.scores[1];
-      }
-    });
-    return [total1, total2];
-  };
-
-  const [cumulativeScore1, cumulativeScore2] = getCumulativeScores();
   const maxScore = 25; // Maximum cumulative score per adjective (capped at 25 for visualization)
-
-  // Calculate top bar score: each time an adjective reaches a multiple of 5, it contributes 1 point
-  // Max 5 contributions per adjective (at 5, 10, 15, 20, 25), so max total is 10
-  const getTopBarScore = (): number => {
-    if (!state) return 0;
-    let topBarScore = 0;
-    // Count filled segments for adjective1 (pink, first 5)
-    const segments1 = Math.min(5, Math.floor(Math.min(cumulativeScore1, 25) / 5));
-    topBarScore += segments1;
-    // Count filled segments for adjective2 (cyan, last 5)
-    const segments2 = Math.min(5, Math.floor(Math.min(cumulativeScore2, 25) / 5));
-    topBarScore += segments2;
-    return topBarScore;
-  };
-
-  const topBarScore = getTopBarScore();
-
-  return (
+                
+                return (
     <div className="h-full flex flex-col relative">
 
       {isDebug && (
@@ -488,36 +642,37 @@ export function Game() {
               Off the Charts
             </div>
           </div>
-          
-          {/* Top score bar: 10 thin vertical containers (5 pink, 5 cyan) */}
-          <div className="flex-shrink-0 flex flex-col items-end gap-1">
-            <div className="text-[0.65rem] text-otc-muted uppercase tracking-[0.1em]">Score</div>
-            <div className="flex items-center gap-2">
-              <div className="text-[0.7rem] font-semibold text-otc-accent-alt">{topBarScore} / 10</div>
-              <div className="flex items-center gap-0.5 w-32">
-                {Array.from({ length: 10 }, (_, i) => {
-                  const isPink = i < 5;
-                  const segmentIndex = isPink ? i : i - 5;
-                  const adjectiveScore = isPink ? cumulativeScore1 : cumulativeScore2;
-                  const filledSegments = Math.min(5, Math.floor(Math.min(adjectiveScore, 25) / 5));
-                  const isFilled = segmentIndex < filledSegments;
-                  
-                  return (
-                    <div
-                      key={i}
-                      className={`flex-1 h-4 rounded-sm border transition-all duration-500 ${
-                        isFilled
-                          ? isPink
-                            ? 'bg-pink-400 border-pink-500 shadow-[0_0_4px_rgba(244,114,182,0.6)]'
-                            : 'bg-cyan-400 border-cyan-500 shadow-[0_0_4px_rgba(34,211,238,0.6)]'
-                          : 'bg-white/10 border-white/20'
-                      }`}
-                    />
-                  );
-                })}
+
+          {/* Top score bar: 10 thin vertical containers (5 pink, 5 cyan) - hidden on end screen */}
+          {!isComplete && (
+            <div className="flex-shrink-0 flex flex-col items-end gap-1">
+              <div className="text-[0.65rem] text-otc-muted uppercase tracking-[0.1em]">Score</div>
+              <div className="flex items-center gap-2">
+                <div className="text-[0.7rem] font-semibold text-otc-accent-alt">{topBarScore} / 10</div>
+                <div ref={topBarRef} className="flex items-center gap-0.5 w-32">
+                  {Array.from({ length: 10 }, (_, i) => {
+                    const isPink = i < 5;
+                    const isFilled = pendingTopBarUpdates.has(i);
+                    
+                    return (
+                      <div
+                        key={i}
+                        className={`flex-1 h-4 rounded-sm border transition-all duration-500 ${
+                          isFilled
+                            ? isPink
+                              ? 'bg-pink-400 border-pink-500 shadow-[0_0_4px_rgba(244,114,182,0.6)]'
+                              : 'bg-cyan-400 border-cyan-500 shadow-[0_0_4px_rgba(34,211,238,0.6)]'
+                            : 'bg-white/10 border-white/20'
+                        }`}
+                      />
+                    );
+                  })}
+                </div>
               </div>
             </div>
-          </div>
+          )}
+          {/* Keep ref for particles even when hidden */}
+          {isComplete && <div ref={topBarRef} className="hidden" />}
         </div>
       </header>
 
@@ -542,10 +697,31 @@ export function Game() {
         </div>
       )}
 
+      {/* Render particles */}
+      {activeParticles.map(particle => {
+        const handleParticleComplete = () => {
+          setActiveParticles(prev => prev.filter(p => p.id !== particle.id));
+          setPendingTopBarUpdates(prev => new Set([...prev, particle.segmentIndex]));
+        };
+        
+        return (
+          <Particle
+            key={particle.id}
+            id={particle.id}
+            isPink={particle.isPink}
+            startX={particle.startX}
+            startY={particle.startY}
+            endX={particle.endX}
+            endY={particle.endY}
+            onComplete={handleParticleComplete}
+          />
+        );
+      })}
+
       {/* Unified Scoreboard */}
       <div className="flex-1 flex items-stretch gap-2 px-7 pb-3 min-h-0">
         {/* Left Pillar */}
-        <div className="w-3 flex-shrink-0 pt-2 pb-2 overflow-hidden rounded">
+        <div ref={leftPillarRef} className="w-3 flex-shrink-0 pt-2 pb-2 overflow-hidden rounded">
           <div className="h-full flex flex-col-reverse gap-0.5 relative">
             {Array.from({ length: 5 }, (_, i) => {
               const segmentThreshold = (i + 1) * 5; // Segment 0 = 5pts, segment 4 = 25pts
@@ -554,6 +730,12 @@ export function Game() {
               
               // Calculate how much of this segment should be filled
               let segmentFillPercent = 0;
+              const isMilestoneReached = cappedScore >= segmentThreshold;
+              // Check if this segment has reached milestone but particle hasn't been confirmed yet
+              const hasActiveParticle = activeParticles.some(p => p.isPink && p.segmentIndex === i);
+              const isConfirmed = pendingTopBarUpdates.has(i);
+              const isCharging = isMilestoneReached && !isConfirmed && !hasActiveParticle && i < filledSegments1;
+              
               if (cappedScore >= segmentThreshold) {
                 segmentFillPercent = 100;
               } else if (cappedScore > prevThreshold) {
@@ -570,10 +752,15 @@ export function Game() {
                 >
                   {/* Fill segment - clipped by segment boundaries */}
                   <div
-                    className="absolute bottom-0 left-0 right-0 bg-pink-400 shadow-[0_0_4px_rgba(244,114,182,0.6)] rounded"
+                    className={`absolute bottom-0 left-0 right-0 bg-pink-400 shadow-[0_0_4px_rgba(244,114,182,0.6)] rounded ${
+                      isCharging ? 'animate-pulse' : ''
+                    }`}
                     style={{
                       height: `${segmentFillPercent}%`,
                       transition: 'height 0.5s linear',
+                      boxShadow: isCharging 
+                        ? '0 0 12px rgba(244,114,182,0.9), 0 0 20px rgba(244,114,182,0.6)' 
+                        : '0 0 4px rgba(244,114,182,0.6)',
                     }}
                   />
                 </div>
@@ -585,47 +772,134 @@ export function Game() {
         {/* Middle Content Area - Scrollable */}
         <div className="flex-1 flex flex-col min-w-0 min-h-0">
           <div className="flex-1 overflow-y-auto">
-            <section className="rounded-xl bg-otc-bg-soft/80 border border-white/5 px-3 py-2 flex flex-col gap-2 min-h-full">
-              <div className="space-y-1.5">
-                <div className="text-xs tracking-[0.25em] uppercase text-otc-accent-alt font-semibold text-center">
-                  Scoreboard
+            {!isComplete ? (
+              <section className="rounded-xl bg-otc-bg-soft/80 border border-white/5 px-3 py-2 flex flex-col gap-2 min-h-full">
+                <div className="space-y-1.5">
+                  <div className="text-xs tracking-[0.25em] uppercase text-otc-accent-alt font-semibold text-center">
+                    Scoreboard
+                  </div>
+                  {previousGuesses.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {(() => {
+                        const bestIndex = getBestIndex(state.guesses);
+                        return previousGuesses.map((g, idx) => {
+                          const combinedScore = g.scores ? g.scores[0] + g.scores[1] : 0;
+                          return (
+                            <PreviousGuessRow
+                              key={idx}
+                              roundLabel={`Guess ${idx + 1}`}
+                              guess={g}
+                              roundIndex={idx}
+                              adjectives={state.adjectives}
+                              onAppeal={openAppeal}
+                              appealsRemaining={0}
+                              canAppealNow={false}
+                              isBest={
+                                previousGuesses.length >= 2 &&
+                                bestIndex === idx &&
+                                combinedScore > 0 &&
+                                !g.isPass
+                              }
+                            />
+                          );
+                        });
+                      })()}
+                    </div>
+                  ) : (
+                    <div className="text-center py-8">
+                      <div className="text-[0.75rem] text-otc-muted/60">
+                        No Judgements Passed Yet
+                      </div>
+                    </div>
+                  )}
                 </div>
-                {previousGuesses.length > 0 ? (
-                  <div className="space-y-1.5">
-                    {(() => {
-                      const bestIndex = getBestIndex(state.guesses);
-                      return previousGuesses.map((g, idx) => {
-                        const combinedScore = g.scores ? g.scores[0] + g.scores[1] : 0;
+              </section>
+            ) : (
+              <div className="space-y-3 pb-3">
+                {/* Complete State - Final Score Display */}
+                <section className="rounded-2xl bg-black/30 border border-otc-accent/40 px-4 py-3 space-y-3">
+                  <div className="text-[0.7rem] tracking-[0.2em] uppercase text-otc-muted text-center">
+                    Final Score
+                  </div>
+                  <div className="flex flex-col items-center gap-3">
+                    <div className="text-4xl sm:text-5xl font-bold text-otc-accent-alt">
+                      {topBarScore} / 10
+                    </div>
+                    <div className="flex items-center justify-center gap-0.5 w-full max-w-xs">
+                      {Array.from({ length: 10 }, (_, i) => {
+                        const isPink = i < 5;
+                        const isFilled = pendingTopBarUpdates.has(i) || (isComplete && activeParticles.length === 0 && (isPink ? i < filledSegments1 : i - 5 < filledSegments2));
+                        
                         return (
-                          <PreviousGuessRow
-                            key={idx}
-                            roundLabel={`Guess ${idx + 1}`}
-                            guess={g}
-                            roundIndex={idx}
-                            adjectives={state.adjectives}
-                            onAppeal={openAppeal}
-                            appealsRemaining={0}
-                            canAppealNow={false}
-                            isBest={
-                              previousGuesses.length >= 2 &&
-                              bestIndex === idx &&
-                              combinedScore > 0 &&
-                              !g.isPass
-                            }
+                          <div
+                            key={i}
+                            className={`flex-1 h-6 rounded-sm border transition-all duration-500 ${
+                              isFilled
+                                ? isPink
+                                  ? 'bg-pink-400 border-pink-500 shadow-[0_0_4px_rgba(244,114,182,0.6)]'
+                                  : 'bg-cyan-400 border-cyan-500 shadow-[0_0_4px_rgba(34,211,238,0.6)]'
+                                : 'bg-white/10 border-white/20'
+                            }`}
                           />
                         );
-                      });
-                    })()}
-                  </div>
-                ) : (
-                  <div className="text-center py-8">
-                    <div className="text-[0.75rem] text-otc-muted/60">
-                      No Judgements Passed Yet
+                      })}
                     </div>
                   </div>
-                )}
+                  <div className="text-[0.8rem] sm:text-sm font-semibold text-center" style={{ color: 'rgb(255, 179, 21)' }}>
+                    That's a wrap! Scroll down to review the game and appeal your most
+                    underrated answer.
+                  </div>
+                </section>
+
+                {/* Complete State - Appeals Section */}
+                <section className="rounded-2xl bg-otc-bg-soft/90 border border-white/10 px-4 py-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-[0.7rem] tracking-[0.2em] uppercase text-otc-muted">
+                      Tonight's board
+                    </div>
+                    <div className="text-[0.8rem] sm:text-sm font-semibold text-otc-accent-alt">
+                      Appeals left: {state.appealsRemaining}
+                    </div>
+                  </div>
+                  <div className="text-[0.75rem] text-otc-muted">
+                    Tap the "Appeal" button on your most underrated answer to send it
+                    to the replay booth.
+                  </div>
+                  <div className="mt-2 space-y-2">
+                    <div className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-display text-base text-otc-accent">
+                            {adjective1.toUpperCase()} & {adjective2.toUpperCase()}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="mt-1 grid grid-cols-1 gap-1.5">
+                        {state.guesses.map((g, ri) => {
+                          const combinedScore = g.scores ? g.scores[0] + g.scores[1] : 0;
+                          const bestIndex = getBestIndex(state.guesses);
+                          return (
+                            <PreviousGuessRow
+                              key={ri}
+                              roundLabel={`Guess ${ri + 1}`}
+                              guess={g}
+                              roundIndex={ri}
+                              adjectives={state.adjectives}
+                              onAppeal={openAppeal}
+                              appealsRemaining={state.appealsRemaining}
+                              canAppealNow={isComplete}
+                              isBest={
+                                ri === bestIndex && combinedScore > 0 && !g.isPass
+                              }
+                            />
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                </section>
               </div>
-            </section>
+            )}
           </div>
 
           {/* Bottom Chin - Input and Buttons */}
@@ -726,14 +1000,14 @@ export function Game() {
                       </button>
                     )}
                   </div>
-                </section>
+            </section>
               ) : null}
             </div>
           )}
         </div>
 
         {/* Right Pillar */}
-        <div className="w-3 flex-shrink-0 pt-2 pb-2 overflow-hidden rounded">
+        <div ref={rightPillarRef} className="w-3 flex-shrink-0 pt-2 pb-2 overflow-hidden rounded">
           <div className="h-full flex flex-col-reverse gap-0.5 relative">
             {Array.from({ length: 5 }, (_, i) => {
               const segmentThreshold = (i + 1) * 5; // Segment 0 = 5pts, segment 4 = 25pts
@@ -742,6 +1016,13 @@ export function Game() {
               
               // Calculate how much of this segment should be filled
               let segmentFillPercent = 0;
+              const isMilestoneReached = cappedScore >= segmentThreshold;
+              // Check if this segment has reached milestone but particle hasn't been confirmed yet
+              const topBarIndex = i + 5; // Cyan segments are 5-9 in top bar
+              const hasActiveParticle = activeParticles.some(p => !p.isPink && p.segmentIndex === topBarIndex);
+              const isConfirmed = pendingTopBarUpdates.has(topBarIndex);
+              const isCharging = isMilestoneReached && !isConfirmed && !hasActiveParticle && i < filledSegments2;
+              
               if (cappedScore >= segmentThreshold) {
                 segmentFillPercent = 100;
               } else if (cappedScore > prevThreshold) {
@@ -758,112 +1039,24 @@ export function Game() {
                 >
                   {/* Fill segment - clipped by segment boundaries */}
                   <div
-                    className="absolute bottom-0 left-0 right-0 bg-cyan-400 shadow-[0_0_4px_rgba(34,211,238,0.6)] rounded"
+                    className={`absolute bottom-0 left-0 right-0 bg-cyan-400 shadow-[0_0_4px_rgba(34,211,238,0.6)] rounded ${
+                      isCharging ? 'animate-pulse' : ''
+                    }`}
                     style={{
                       height: `${segmentFillPercent}%`,
                       transition: 'height 0.5s linear',
+                      boxShadow: isCharging 
+                        ? '0 0 12px rgba(34,211,238,0.9), 0 0 20px rgba(34,211,238,0.6)' 
+                        : '0 0 4px rgba(34,211,238,0.6)',
                     }}
                   />
                 </div>
               );
             })}
-          </div>
-        </div>
-      </div>
-
-      {/* Complete State - Final Score Display */}
-      {isComplete && (
-        <div className="px-7 pb-3">
-          <section className="rounded-2xl bg-black/30 border border-otc-accent/40 px-4 py-3 space-y-3">
-            <div className="text-[0.7rem] tracking-[0.2em] uppercase text-otc-muted text-center">
-              Final Score
-            </div>
-            <div className="flex flex-col items-center gap-3">
-              <div className="text-4xl sm:text-5xl font-bold text-otc-accent-alt">
-                {topBarScore} / 10
-              </div>
-              <div className="flex items-center justify-center gap-0.5 w-full max-w-xs">
-                {Array.from({ length: 10 }, (_, i) => {
-                  const isPink = i < 5;
-                  const segmentIndex = isPink ? i : i - 5;
-                  const adjectiveScore = isPink ? cumulativeScore1 : cumulativeScore2;
-                  const filledSegments = Math.min(5, Math.floor(Math.min(adjectiveScore, 25) / 5));
-                  const isFilled = segmentIndex < filledSegments;
-                  
-                  return (
-                    <div
-                      key={i}
-                      className={`flex-1 h-6 rounded-sm border transition-all duration-500 ${
-                        isFilled
-                          ? isPink
-                            ? 'bg-pink-400 border-pink-500 shadow-[0_0_4px_rgba(244,114,182,0.6)]'
-                            : 'bg-cyan-400 border-cyan-500 shadow-[0_0_4px_rgba(34,211,238,0.6)]'
-                          : 'bg-white/10 border-white/20'
-                      }`}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-            <div className="text-[0.8rem] sm:text-sm font-semibold text-center text-otc-accent-alt">
-              That's a wrap! Scroll down to review the game and appeal your most
-              underrated answer.
-            </div>
-          </section>
-        </div>
-      )}
-
-      {/* Complete State - Appeals Section */}
-      {isComplete && (
-        <div className="px-7 pb-3">
-          <section className="rounded-2xl bg-otc-bg-soft/90 border border-white/10 px-4 py-3 space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-[0.7rem] tracking-[0.2em] uppercase text-otc-muted">
-                Tonight's board
-              </div>
-              <div className="text-[0.8rem] sm:text-sm font-semibold text-otc-accent-alt">
-                Appeals left: {state.appealsRemaining}
-              </div>
-            </div>
-            <div className="text-[0.75rem] text-otc-muted">
-              Tap the "Appeal" button on your most underrated answer to send it
-              to the replay booth.
-            </div>
-            <div className="mt-2 space-y-2">
-              <div className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="font-display text-base text-otc-accent">
-                      {adjective1.toUpperCase()} & {adjective2.toUpperCase()}
-                    </span>
+                  </div>
                   </div>
                 </div>
-                <div className="mt-1 grid grid-cols-1 gap-1.5">
-                  {state.guesses.map((g, ri) => {
-                    const combinedScore = g.scores ? g.scores[0] + g.scores[1] : 0;
-                    const bestIndex = getBestIndex(state.guesses);
-                    return (
-                      <PreviousGuessRow
-                        key={ri}
-                        roundLabel={`Guess ${ri + 1}`}
-                        guess={g}
-                        roundIndex={ri}
-                        adjectives={state.adjectives}
-                        onAppeal={openAppeal}
-                        appealsRemaining={state.appealsRemaining}
-                        canAppealNow={isComplete}
-                        isBest={
-                          ri === bestIndex && combinedScore > 0 && !g.isPass
-                        }
-                      />
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          </section>
-        </div>
-      )}
+
 
       {appealOpenFor !== null && (
         <AppealModal
@@ -879,6 +1072,149 @@ export function Game() {
         />
       )}
     </div>
+  );
+}
+
+// Particle component with ghost trail
+type ParticleProps = {
+  id: string;
+  isPink: boolean;
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  onComplete: () => void;
+};
+
+function Particle({ id, isPink, startX, startY, endX, endY, onComplete }: ParticleProps) {
+  const [position, setPosition] = useState({ x: startX, y: startY });
+  const [ghostTrail, setGhostTrail] = useState<Array<{ x: number; y: number; opacity: number; id: number }>>([]);
+  const trailIdRef = useRef(0);
+  const animationFrameRef = useRef<number | null>(null);
+  const lastPosRef = useRef({ x: startX, y: startY });
+  const ghostTimeoutsRef = useRef<NodeJS.Timeout[]>([]);
+  const onCompleteRef = useRef(onComplete);
+
+  // Keep onComplete ref up to date
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
+
+  useEffect(() => {
+    const duration = 800; // 800ms animation
+    const startTime = Date.now();
+    const dx = endX - startX;
+    const dy = endY - startY;
+    
+    // Create arc path (parabolic)
+    const arcHeight = -Math.abs(dy) * 0.5; // Negative for upward arc
+    
+    let isCancelled = false;
+    
+    const animate = () => {
+      if (isCancelled) return;
+      
+      const elapsed = Date.now() - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      
+      // Ease-out curve
+      const eased = 1 - Math.pow(1 - progress, 3);
+      
+      // Calculate position along arc
+      const x = startX + dx * eased;
+      const y = startY + dy * eased + arcHeight * Math.sin(eased * Math.PI);
+      
+      setPosition({ x, y });
+      
+      // Add ghost to trail if moved enough
+      const distFromLast = Math.sqrt(
+        Math.pow(x - lastPosRef.current.x, 2) + Math.pow(y - lastPosRef.current.y, 2)
+      );
+      if (distFromLast > 2) { // Add ghost every 2px of movement
+        const newGhost = {
+          x,
+          y,
+          opacity: 1,
+          id: trailIdRef.current++,
+        };
+        setGhostTrail(prev => [...prev, newGhost]);
+        lastPosRef.current = { x, y };
+        
+        // Fade out ghosts quickly
+        const timeout1 = setTimeout(() => {
+          if (!isCancelled) {
+            setGhostTrail(prev => prev.map(g => g.id === newGhost.id ? { ...g, opacity: 0 } : g));
+            const timeout2 = setTimeout(() => {
+              if (!isCancelled) {
+                setGhostTrail(prev => prev.filter(g => g.id !== newGhost.id));
+              }
+            }, 150);
+            ghostTimeoutsRef.current.push(timeout2);
+          }
+        }, 50);
+        ghostTimeoutsRef.current.push(timeout1);
+      }
+      
+      if (progress < 1) {
+        animationFrameRef.current = requestAnimationFrame(animate);
+      } else {
+        if (!isCancelled) {
+          onCompleteRef.current();
+        }
+      }
+    };
+    
+    animationFrameRef.current = requestAnimationFrame(animate);
+    
+    return () => {
+      isCancelled = true;
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+      // Clean up all ghost timeouts
+      ghostTimeoutsRef.current.forEach(timeout => clearTimeout(timeout));
+      ghostTimeoutsRef.current = [];
+    };
+  }, [startX, startY, endX, endY]);
+
+  const color = isPink ? 'rgb(244, 114, 182)' : 'rgb(34, 211, 238)';
+  
+  return (
+    <>
+      {/* Ghost trail */}
+      {ghostTrail.map(ghost => (
+        <div
+          key={ghost.id}
+          className="fixed pointer-events-none rounded-full"
+          style={{
+            left: `${ghost.x}px`,
+            top: `${ghost.y}px`,
+            width: '8px',
+            height: '8px',
+            backgroundColor: color,
+            opacity: ghost.opacity * 0.5,
+            transform: 'translate(-50%, -50%)',
+            boxShadow: `0 0 4px ${color}`,
+            transition: 'opacity 0.15s linear',
+            zIndex: 999,
+          }}
+        />
+      ))}
+      {/* Main particle */}
+      <div
+        className="fixed pointer-events-none rounded-full"
+        style={{
+          left: `${position.x}px`,
+          top: `${position.y}px`,
+          width: '10px',
+          height: '10px',
+          backgroundColor: color,
+          transform: 'translate(-50%, -50%)',
+          boxShadow: `0 0 8px ${color}`,
+          zIndex: 1000,
+        }}
+      />
+    </>
   );
 }
 
@@ -919,28 +1255,28 @@ function PreviousGuessRow({
     <div
       className={`rounded-lg px-2.5 py-1.5 border ${containerHighlightClasses}`}
     >
-        <div className="flex flex-col items-center gap-1 mb-1">
-          <div className="flex items-center w-full relative">
+      <div className="flex flex-col items-center gap-1 mb-1">
+        <div className="flex items-center w-full relative">
             {guess.scores && !guess.isPass && isBest && (
               <div className="absolute left-0 text-lg font-bold uppercase tracking-[0.16em] text-otc-accent-strong">
                 BEST
+            </div>
+          )}
+          <div className="flex items-center justify-center gap-4 flex-1">
+            <div className="text-sm font-bold uppercase text-otc-text break-words text-center">
+              {guess.noun}
+            </div>
+            {guess.scores && !guess.isPass && (
+              <div className={`text-lg font-bold ${
+                  isBest
+                  ? "text-otc-accent-strong"
+                  : "text-otc-accent-alt"
+              }`}>
+                {combinedScore}<span className="text-sm opacity-70">/20</span>
               </div>
             )}
-            <div className="flex items-center justify-center gap-4 flex-1">
-              <div className="text-sm font-bold uppercase text-otc-text break-words text-center">
-                {guess.noun}
-              </div>
-              {guess.scores && !guess.isPass && (
-                <div className={`text-lg font-bold ${
-                  isBest
-                    ? "text-otc-accent-strong"
-                    : "text-otc-accent-alt"
-                }`}>
-                  {combinedScore}<span className="text-sm opacity-70">/20</span>
-                </div>
-              )}
-            </div>
           </div>
+        </div>
         {guess.appealed && (
           <div className="text-[0.6rem] uppercase tracking-[0.18em] text-otc-muted">
             {(() => {
