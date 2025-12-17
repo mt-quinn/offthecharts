@@ -21,8 +21,8 @@ export type GameState = {
   mode: GameMode;
   dateKey: string; // YYYY-MM-DD for daily mode
   adjectives: [string, string]; // exactly 2 adjectives
-  guesses: GuessResult[]; // 5 guesses for the single combined category
-  currentTurnIndex: number; // 0..4
+  guesses: GuessResult[]; // 3 guesses for the single combined category
+  currentTurnIndex: number; // 0..2
   appealsRemaining: number; // starts at 1
 };
 
@@ -40,7 +40,7 @@ function todayKey() {
 }
 
 function emptyGuesses(): GuessResult[] {
-  return Array.from({ length: 5 }, () => ({ noun: "" }));
+  return Array.from({ length: 3 }, () => ({ noun: "" }));
 }
 
 function createNewDailyState(): GameState {
@@ -120,13 +120,13 @@ export function useDailyGameState() {
 
   const currentTurn = useMemo(() => {
     if (!state) return null;
-    const idx = Math.min(Math.max(state.currentTurnIndex, 0), 4);
+    const idx = Math.min(Math.max(state.currentTurnIndex, 0), 2);
     return { idx, roundIndex: idx };
   }, [state]);
 
   const isComplete = useMemo(() => {
     if (!state) return false;
-    return state.currentTurnIndex >= 5;
+    return state.currentTurnIndex >= 3;
   }, [state]);
 
   const totalScore = useMemo(() => {
@@ -178,7 +178,7 @@ export function useDailyGameState() {
   const advanceTurn = useCallback(() => {
     setState((prev) => {
       if (!prev) return prev;
-      const maxTurns = 5;
+      const maxTurns = 3;
       let nextTurnIndex = prev.currentTurnIndex + 1;
       // Skip passes
       while (nextTurnIndex < maxTurns) {
@@ -207,22 +207,6 @@ export function useDailyGameState() {
             ? { ...g, scores, reasonings }
             : g,
         );
-
-        // If a perfect 20 (10+10) was achieved, auto-mark all remaining empty
-        // guesses as "Perfect Score Achieved" so they show up explicitly in the UI.
-        if (scores[0] === 10 && scores[1] === 10) {
-          for (let i = roundIndex + 1; i < guesses.length; i++) {
-            const g = guesses[i];
-            if (!g.noun && !g.isPass) {
-              guesses[i] = {
-                ...g,
-                noun: "Perfect Score Achieved",
-                scores: [10, 10] as [number, number],
-                isPass: true,
-              };
-            }
-          }
-        }
 
         return { ...prev, guesses };
       });
