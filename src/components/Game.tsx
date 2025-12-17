@@ -93,7 +93,7 @@ export function Game() {
   const lastTurnIdxRef = useRef<number | null>(null);
   const lastGameKeyRef = useRef<string | null>(null);
 
-  // Reset used categories when a new game starts
+  // Reset used categories and score-related state when a new game starts
   useEffect(() => {
     if (!state) return;
     // For daily mode, use dateKey; for debug-random, use adjectives to ensure fresh categories per game
@@ -102,6 +102,14 @@ export function Game() {
       : state.dateKey;
     if (lastGameKeyRef.current !== gameKey) {
       usedCategoriesRef.current.clear();
+      // Reset all score and particle-related state for new game
+      setActiveParticles([]);
+      setPendingTopBarUpdates(new Set());
+      prevFilledSegmentsRef.current = [0, 0];
+      prevCumulativeScoresRef.current = [0, 0];
+      // Clear any pending particle timeouts
+      particleTimeoutIdsRef.current.forEach(id => clearTimeout(id));
+      particleTimeoutIdsRef.current = [];
       lastGameKeyRef.current = gameKey;
     }
   }, [state]);
