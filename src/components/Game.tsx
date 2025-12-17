@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback, useLayoutEffect, useId } from "react";
 import { GuessResult, useDailyGameState } from "@/hooks/useDailyGameState";
 
 type ScoreResponse = {
@@ -82,6 +82,19 @@ export function Game() {
   const rightPillarRef = useRef<HTMLDivElement | null>(null);
   const topBarRef = useRef<HTMLDivElement | null>(null);
   const particleTimeoutIdsRef = useRef<NodeJS.Timeout[]>([]);
+  const leftSegmentContainerRef = useRef<HTMLDivElement | null>(null);
+  const rightSegmentContainerRef = useRef<HTMLDivElement | null>(null);
+  type PillarClipGeom = {
+    w: number;
+    h: number;
+    rects: Array<{ x: number; y: number; w: number; h: number; r: number }>;
+  };
+  const [leftPillarGeom, setLeftPillarGeom] = useState<PillarClipGeom | null>(null);
+  const [rightPillarGeom, setRightPillarGeom] = useState<PillarClipGeom | null>(null);
+  const leftClipIdRaw = useId();
+  const rightClipIdRaw = useId();
+  const leftClipId = `otc-left-pillar-clip-${leftClipIdRaw.replace(/:/g, "")}`;
+  const rightClipId = `otc-right-pillar-clip-${rightClipIdRaw.replace(/:/g, "")}`;
 
   // Temporarily force debug tools on in all builds (including production)
   // so they are available while testing.
@@ -441,6 +454,89 @@ export function Game() {
 
   const topBarScore = getTopBarScore();
 
+  const readPillarGeom = useCallback((container: HTMLDivElement): PillarClipGeom | null => {
+    const segEls = Array.from(
+      container.querySelectorAll<HTMLElement>("[data-pillar-segment]")
+    );
+    if (segEls.length !== 5) return null;
+
+    const w = container.clientWidth;
+    const h = container.clientHeight;
+    if (w <= 0 || h <= 0) return null;
+
+    const rootFontPx =
+      parseFloat(window.getComputedStyle(document.documentElement).fontSize || "16") ||
+      16;
+    const toPx = (v: string): number => {
+      const s = (v || "").trim();
+      if (!s) return 0;
+      if (s.endsWith("px")) return parseFloat(s) || 0;
+      if (s.endsWith("rem")) return (parseFloat(s) || 0) * rootFontPx;
+      return parseFloat(s) || 0;
+    };
+
+    const rects = segEls.map((el) => {
+      const cs = window.getComputedStyle(el);
+      const r = toPx(cs.borderTopLeftRadius || "0");
+      return {
+        x: el.offsetLeft,
+        y: el.offsetTop,
+        w: el.offsetWidth,
+        h: el.offsetHeight,
+        r,
+      };
+    });
+
+    return { w, h, rects };
+  }, []);
+
+  // Measure exact segment geometry (including gaps + rounded corners) for hard clipping
+  useLayoutEffect(() => {
+    const container = leftSegmentContainerRef.current;
+    if (!container) return;
+
+    let raf = 0;
+    const update = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const geom = readPillarGeom(container);
+        if (geom) setLeftPillarGeom(geom);
+      });
+    };
+
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(container);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
+  }, [readPillarGeom]);
+
+  useLayoutEffect(() => {
+    const container = rightSegmentContainerRef.current;
+    if (!container) return;
+
+    let raf = 0;
+    const update = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const geom = readPillarGeom(container);
+        if (geom) setRightPillarGeom(geom);
+      });
+    };
+
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(container);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
+  }, [readPillarGeom]);
+
   // Detect new segments and trigger particles - MUST be before early return
   useEffect(() => {
     if (!state || !leftPillarRef.current || !rightPillarRef.current || !topBarRef.current) {
@@ -484,12 +580,12 @@ export function Game() {
           const pillar = pillarRef.current;
           const segmentsContainer = pillar.firstElementChild as HTMLElement;
           if (!segmentsContainer) return null;
-          const segments = segmentsContainer.children;
+          const segments = segmentsContainer.querySelectorAll<HTMLElement>('[data-pillar-segment]');
           if (segments.length === 0) return null;
           
-          // Segments are in reverse order (flex-col-reverse), so segmentIndex 0 is the last segment
-          const actualIndex = segments.length - 1 - segmentIndex;
-          const segment = segments[actualIndex] as HTMLElement;
+          // Segment index 0 is the bottom-most segment (milestone 5). With flex-col-reverse,
+          // DOM order already corresponds bottom -> top for our rendered segments.
+          const segment = segments[segmentIndex] as HTMLElement | undefined;
           if (!segment) return null;
           
           const segmentRect = segment.getBoundingClientRect();
@@ -733,50 +829,93 @@ export function Game() {
           {/* Top Row: Pillars + Scoreboard */}
           <div className="flex-1 flex items-stretch gap-0 min-h-0">
           {/* Left Pillar */}
-          <div ref={leftPillarRef} className="w-10 flex-shrink-0 pt-2 overflow-hidden bg-otc-bg-soft/80">
-            <div className="h-full flex flex-col-reverse gap-1 px-1.5 relative">
-            {Array.from({ length: 5 }, (_, i) => {
-              const segmentThreshold = (i + 1) * 5; // Segment 0 = 5pts, segment 4 = 25pts
-              const prevThreshold = i * 5; // Previous segment threshold
-              const cappedScore = Math.min(cumulativeScore1, 25);
-              
-              // Calculate how much of this segment should be filled
-              let segmentFillPercent = 0;
-              const isMilestoneReached = cappedScore >= segmentThreshold;
-              // Check if this segment has reached milestone but particle hasn't been confirmed yet
-              const hasActiveParticle = activeParticles.some(p => p.isPink && p.segmentIndex === i);
-              const isConfirmed = pendingTopBarUpdates.has(i);
-              const isCharging = isMilestoneReached && !isConfirmed && !hasActiveParticle && i < filledSegments1;
-              
-              if (cappedScore >= segmentThreshold) {
-                segmentFillPercent = 100;
-              } else if (cappedScore > prevThreshold) {
-                segmentFillPercent = ((cappedScore - prevThreshold) / 5) * 100;
-              }
-              
-              return (
-                <div
-                  key={i}
-                  className="w-full flex-1 rounded relative overflow-hidden border border-pink-400/30 bg-black/30"
+          <div ref={leftPillarRef} className="w-10 flex-shrink-0 pt-2 overflow-hidden bg-otc-bg-soft/80 relative">
+            {/* Segment containers */}
+            <div ref={leftSegmentContainerRef} className="h-full flex flex-col-reverse gap-1 px-1.5 relative">
+              {/* SVG overlay: renders the fill and clips it to the exact 5 rounded segments (Firefox-safe) */}
+              {leftPillarGeom && (
+                <svg
+                  className="absolute inset-0 pointer-events-none"
+                  style={{ zIndex: 0 }}
+                  width="100%"
+                  height="100%"
+                  viewBox={`0 0 ${leftPillarGeom.w} ${leftPillarGeom.h}`}
+                  preserveAspectRatio="none"
+                  aria-hidden="true"
                 >
-                  {/* Fill segment - clipped by segment boundaries */}
+                  <defs>
+                    <clipPath id={leftClipId} clipPathUnits="userSpaceOnUse">
+                      {leftPillarGeom.rects.map((r, idx) => (
+                        <rect
+                          key={idx}
+                          x={r.x}
+                          y={r.y}
+                          width={r.w}
+                          height={r.h}
+                          rx={r.r}
+                          ry={r.r}
+                        />
+                      ))}
+                    </clipPath>
+                  </defs>
+                  <g clipPath={`url(#${leftClipId})`}>
+                    {/* base */}
+                    <rect x="0" y="0" width={leftPillarGeom.w} height={leftPillarGeom.h} fill="rgba(0,0,0,0.30)" />
+                    {/* fill */}
+                    {(() => {
+                      const pct = Math.min(100, (Math.min(cumulativeScore1, 25) / 25) * 100);
+                      const scale = pct / 100;
+                      return (
+                        <rect
+                          x="0"
+                          y="0"
+                          width={leftPillarGeom.w}
+                          height={leftPillarGeom.h}
+                          fill="rgb(244, 114, 182)"
+                          style={{
+                            transformBox: "fill-box",
+                            transformOrigin: "center bottom",
+                            transform: `scaleY(${scale})`,
+                            transition: "transform 0.5s linear",
+                          }}
+                        />
+                      );
+                    })()}
+                  </g>
+                </svg>
+              )}
+
+              {Array.from({ length: 5 }, (_, i) => {
+                const segmentThreshold = (i + 1) * 5; // Segment 0 = 5pts, segment 4 = 25pts
+                const cappedScore = Math.min(cumulativeScore1, 25);
+                const isMilestoneReached = cappedScore >= segmentThreshold;
+                // Check if this segment has reached milestone but particle hasn't been confirmed yet
+                const hasActiveParticle = activeParticles.some(p => p.isPink && p.segmentIndex === i);
+                const isConfirmed = pendingTopBarUpdates.has(i);
+                const isCharging = isMilestoneReached && !isConfirmed && !hasActiveParticle && i < filledSegments1;
+                
+                return (
                   <div
-                    className={`absolute bottom-0 left-0 right-0 bg-pink-400 shadow-[0_0_4px_rgba(244,114,182,0.6)] rounded ${
-                      isCharging ? 'animate-pulse' : ''
-                    }`}
-                    style={{
-                      height: `${segmentFillPercent}%`,
-                      transition: 'height 0.5s linear',
-                      boxShadow: isCharging 
-                        ? '0 0 12px rgba(244,114,182,0.9), 0 0 20px rgba(244,114,182,0.6)' 
-                        : '0 0 4px rgba(244,114,182,0.6)',
-                    }}
-                  />
-                </div>
-              );
-            })}
+                    key={i}
+                    data-pillar-segment
+                    className="w-full flex-1 rounded relative overflow-hidden border border-pink-400/30 bg-transparent z-10"
+                  >
+                    {/* Charging glow effect when segment reaches milestone */}
+                    {isCharging && (
+                      <div
+                        className="absolute inset-0 bg-pink-400 animate-pulse"
+                        style={{
+                          opacity: 0.3,
+                          boxShadow: '0 0 12px rgba(244,114,182,0.9), 0 0 20px rgba(244,114,182,0.6)',
+                          zIndex: 20,
+                        }}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
-        </div>
 
           {/* Middle Content Area - Scrollable */}
           <div className="flex-1 flex flex-col min-w-0 min-h-0">
@@ -913,15 +1052,65 @@ export function Game() {
           </div>
 
           {/* Right Pillar */}
-          <div ref={rightPillarRef} className="w-10 flex-shrink-0 pt-2 overflow-hidden bg-otc-bg-soft/80">
-            <div className="h-full flex flex-col-reverse gap-1 px-1.5 relative">
+          <div ref={rightPillarRef} className="w-10 flex-shrink-0 pt-2 overflow-hidden bg-otc-bg-soft/80 relative">
+            {/* Segment containers */}
+            <div ref={rightSegmentContainerRef} className="h-full flex flex-col-reverse gap-1 px-1.5 relative">
+              {/* SVG overlay: renders the fill and clips it to the exact 5 rounded segments (Firefox-safe) */}
+              {rightPillarGeom && (
+                <svg
+                  className="absolute inset-0 pointer-events-none"
+                  style={{ zIndex: 0 }}
+                  width="100%"
+                  height="100%"
+                  viewBox={`0 0 ${rightPillarGeom.w} ${rightPillarGeom.h}`}
+                  preserveAspectRatio="none"
+                  aria-hidden="true"
+                >
+                  <defs>
+                    <clipPath id={rightClipId} clipPathUnits="userSpaceOnUse">
+                      {rightPillarGeom.rects.map((r, idx) => (
+                        <rect
+                          key={idx}
+                          x={r.x}
+                          y={r.y}
+                          width={r.w}
+                          height={r.h}
+                          rx={r.r}
+                          ry={r.r}
+                        />
+                      ))}
+                    </clipPath>
+                  </defs>
+                  <g clipPath={`url(#${rightClipId})`}>
+                    {/* base */}
+                    <rect x="0" y="0" width={rightPillarGeom.w} height={rightPillarGeom.h} fill="rgba(0,0,0,0.30)" />
+                    {/* fill */}
+                    {(() => {
+                      const pct = Math.min(100, (Math.min(cumulativeScore2, 25) / 25) * 100);
+                      const scale = pct / 100;
+                      return (
+                        <rect
+                          x="0"
+                          y="0"
+                          width={rightPillarGeom.w}
+                          height={rightPillarGeom.h}
+                          fill="rgb(34, 211, 238)"
+                          style={{
+                            transformBox: "fill-box",
+                            transformOrigin: "center bottom",
+                            transform: `scaleY(${scale})`,
+                            transition: "transform 0.5s linear",
+                          }}
+                        />
+                      );
+                    })()}
+                  </g>
+                </svg>
+              )}
+
               {Array.from({ length: 5 }, (_, i) => {
                 const segmentThreshold = (i + 1) * 5; // Segment 0 = 5pts, segment 4 = 25pts
-                const prevThreshold = i * 5; // Previous segment threshold
                 const cappedScore = Math.min(cumulativeScore2, 25);
-                
-                // Calculate how much of this segment should be filled
-                let segmentFillPercent = 0;
                 const isMilestoneReached = cappedScore >= segmentThreshold;
                 // Check if this segment has reached milestone but particle hasn't been confirmed yet
                 const topBarIndex = i + 5; // Cyan segments are 5-9 in top bar
@@ -929,30 +1118,23 @@ export function Game() {
                 const isConfirmed = pendingTopBarUpdates.has(topBarIndex);
                 const isCharging = isMilestoneReached && !isConfirmed && !hasActiveParticle && i < filledSegments2;
                 
-                if (cappedScore >= segmentThreshold) {
-                  segmentFillPercent = 100;
-                } else if (cappedScore > prevThreshold) {
-                  segmentFillPercent = ((cappedScore - prevThreshold) / 5) * 100;
-                }
-                
                 return (
                   <div
                     key={i}
-                    className="w-full flex-1 rounded relative overflow-hidden border border-cyan-400/30 bg-black/30"
+                    data-pillar-segment
+                    className="w-full flex-1 rounded relative overflow-hidden border border-cyan-400/30 bg-transparent z-10"
                   >
-                    {/* Fill segment - clipped by segment boundaries */}
-                    <div
-                      className={`absolute bottom-0 left-0 right-0 bg-cyan-400 shadow-[0_0_4px_rgba(34,211,238,0.6)] rounded ${
-                        isCharging ? 'animate-pulse' : ''
-                      }`}
-                      style={{
-                        height: `${segmentFillPercent}%`,
-                        transition: 'height 0.5s linear',
-                        boxShadow: isCharging 
-                          ? '0 0 12px rgba(34,211,238,0.9), 0 0 20px rgba(34,211,238,0.6)' 
-                          : '0 0 4px rgba(34,211,238,0.6)',
-                      }}
-                    />
+                    {/* Charging glow effect when segment reaches milestone */}
+                    {isCharging && (
+                      <div
+                        className="absolute inset-0 bg-cyan-400 animate-pulse"
+                        style={{
+                          opacity: 0.3,
+                          boxShadow: '0 0 12px rgba(34,211,238,0.9), 0 0 20px rgba(34,211,238,0.6)',
+                          zIndex: 20,
+                        }}
+                      />
+                    )}
                   </div>
                 );
               })}
@@ -960,22 +1142,22 @@ export function Game() {
           </div>
         </div>
 
-          {/* Bottom Row: Input Container - Full Width */}
-          {!isComplete && (
-            <div className="flex-shrink-0">
-              {awaitingNextCategory && roundIndex < 2 ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAwaitingNextCategory(false);
-                    advanceTurn();
-                  }}
-                  className="w-full inline-flex items-center justify-center rounded-full bg-gradient-to-r from-otc-accent-strong to-otc-accent-alt px-4 py-2 text-sm font-semibold text-black shadow-otc-glow"
-                >
-                  Continue
-                </button>
-              ) : !awaitingNextCategory ? (
-                <section className="bg-otc-bg-soft/80 px-3 py-2 flex flex-col gap-2">
+        {/* Bottom Row: Input Container - Full Width */}
+        {!isComplete && (
+          <div className="flex-shrink-0">
+            {awaitingNextCategory && roundIndex < 2 ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setAwaitingNextCategory(false);
+                  advanceTurn();
+                }}
+                className="w-full inline-flex items-center justify-center rounded-full bg-gradient-to-r from-otc-accent-strong to-otc-accent-alt px-4 py-2 text-sm font-semibold text-black shadow-otc-glow"
+              >
+                Continue
+              </button>
+            ) : !awaitingNextCategory ? (
+              <section className="bg-otc-bg-soft/80 px-3 py-2 flex flex-col gap-2">
                   <div className="space-y-1">
                     {/* Visually hide the label but keep it for screen readers */}
                     <label htmlFor="noun-input" className="sr-only">
@@ -1059,13 +1241,13 @@ export function Game() {
                     )}
                   </div>
             </section>
-            ) : null}
+              ) : null}
                     </div>
                   )}
                 </div>
       </div>
 
-      {appealOpenFor !== null && (
+      {appealOpenFor !== null && state && (
         <AppealModal
           guess={state.guesses[appealOpenFor]}
           adjectives={state.adjectives}
