@@ -17,4 +17,4 @@ export function getOpenAIClient() {
 }
 
 export const DEFAULT_MODEL_ID =
-  process.env.OFF_THE_CHARTS_MODEL_ID || "gpt-5.1-2025-11-13";
+  process.env.OFF_THE_CHARTS_MODEL_ID || "gpt-5.2-2025-12-11";

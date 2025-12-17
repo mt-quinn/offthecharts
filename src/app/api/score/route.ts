@@ -32,7 +32,7 @@ export async function POST(req: Request) {
       ],
       max_completion_tokens: 180,
       reasoning_effort:
-        DEFAULT_MODEL_ID === "gpt-5.1-2025-11-13" ? ("none" as any) : "minimal",
+        DEFAULT_MODEL_ID === "gpt-5.2-2025-12-11" ? ("none" as any) : "minimal",
       verbosity: "low",
     });
 
