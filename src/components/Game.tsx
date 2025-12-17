@@ -606,8 +606,8 @@ export function Game() {
   };
 
   const maxScore = 25; // Maximum cumulative score per adjective (capped at 25 for visualization)
-                
-                return (
+
+  return (
     <div className="h-full flex flex-col relative">
 
       {isDebug && (
@@ -667,8 +667,8 @@ export function Game() {
                       />
                     );
                   })}
-                </div>
-              </div>
+            </div>
+          </div>
             </div>
           )}
           {/* Keep ref for particles even when hidden */}
@@ -719,10 +719,14 @@ export function Game() {
       })}
 
       {/* Unified Scoreboard */}
-      <div className="flex-1 flex items-stretch gap-2 px-7 pb-3 min-h-0">
-        {/* Left Pillar */}
-        <div ref={leftPillarRef} className="w-3 flex-shrink-0 pt-2 pb-2 overflow-hidden rounded">
-          <div className="h-full flex flex-col-reverse gap-0.5 relative">
+      <div className="flex-1 flex flex-col gap-0 px-7 pb-3 min-h-0">
+        {/* Wrapper with unified border */}
+        <div className="flex-1 flex flex-col rounded-xl border overflow-hidden min-h-0" style={{ borderColor: 'rgba(255, 255, 255, 0.2)' }}>
+          {/* Top Row: Pillars + Scoreboard */}
+          <div className="flex-1 flex items-stretch gap-0 min-h-0">
+          {/* Left Pillar */}
+          <div ref={leftPillarRef} className="w-10 flex-shrink-0 pt-2 overflow-hidden bg-otc-bg-soft/80">
+            <div className="h-full flex flex-col-reverse gap-1 px-1.5 relative">
             {Array.from({ length: 5 }, (_, i) => {
               const segmentThreshold = (i + 1) * 5; // Segment 0 = 5pts, segment 4 = 25pts
               const prevThreshold = i * 5; // Previous segment threshold
@@ -745,10 +749,7 @@ export function Game() {
               return (
                 <div
                   key={i}
-                  className="w-full flex-1 rounded relative overflow-hidden"
-                  style={{
-                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                  }}
+                  className="w-full flex-1 rounded relative overflow-hidden border border-pink-400/30 bg-black/30"
                 >
                   {/* Fill segment - clipped by segment boundaries */}
                   <div
@@ -769,142 +770,191 @@ export function Game() {
           </div>
         </div>
 
-        {/* Middle Content Area - Scrollable */}
-        <div className="flex-1 flex flex-col min-w-0 min-h-0">
-          <div className="flex-1 overflow-y-auto">
-            {!isComplete ? (
-              <section className="rounded-xl bg-otc-bg-soft/80 border border-white/5 px-3 py-2 flex flex-col gap-2 min-h-full">
+          {/* Middle Content Area - Scrollable */}
+          <div className="flex-1 flex flex-col min-w-0 min-h-0">
+            <div className="flex-1 overflow-y-auto">
+              {!isComplete ? (
+                <section className="bg-otc-bg-soft/80 px-3 py-2 flex flex-col gap-2 min-h-full">
                 <div className="space-y-1.5">
-                  <div className="text-xs tracking-[0.25em] uppercase text-otc-accent-alt font-semibold text-center">
+                  <div className="text-lg tracking-[0.25em] uppercase text-otc-accent-alt font-semibold text-center">
                     Scoreboard
                   </div>
-                  {previousGuesses.length > 0 ? (
-                    <div className="space-y-1.5">
-                      {(() => {
-                        const bestIndex = getBestIndex(state.guesses);
-                        return previousGuesses.map((g, idx) => {
-                          const combinedScore = g.scores ? g.scores[0] + g.scores[1] : 0;
-                          return (
-                            <PreviousGuessRow
-                              key={idx}
-                              roundLabel={`Guess ${idx + 1}`}
-                              guess={g}
-                              roundIndex={idx}
-                              adjectives={state.adjectives}
-                              onAppeal={openAppeal}
-                              appealsRemaining={0}
-                              canAppealNow={false}
-                              isBest={
-                                previousGuesses.length >= 2 &&
-                                bestIndex === idx &&
-                                combinedScore > 0 &&
-                                !g.isPass
-                              }
-                            />
-                          );
-                        });
-                      })()}
-                    </div>
-                  ) : (
-                    <div className="text-center py-8">
-                      <div className="text-[0.75rem] text-otc-muted/60">
-                        No Judgements Passed Yet
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </section>
-            ) : (
-              <div className="space-y-3 pb-3">
-                {/* Complete State - Final Score Display */}
-                <section className="rounded-2xl bg-black/30 border border-otc-accent/40 px-4 py-3 space-y-3">
-                  <div className="text-[0.7rem] tracking-[0.2em] uppercase text-otc-muted text-center">
-                    Final Score
-                  </div>
-                  <div className="flex flex-col items-center gap-3">
-                    <div className="text-4xl sm:text-5xl font-bold text-otc-accent-alt">
-                      {topBarScore} / 10
-                    </div>
-                    <div className="flex items-center justify-center gap-0.5 w-full max-w-xs">
-                      {Array.from({ length: 10 }, (_, i) => {
-                        const isPink = i < 5;
-                        const isFilled = pendingTopBarUpdates.has(i) || (isComplete && activeParticles.length === 0 && (isPink ? i < filledSegments1 : i - 5 < filledSegments2));
-                        
+                    {previousGuesses.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {(() => {
+                      const bestIndex = getBestIndex(state.guesses);
+                      return previousGuesses.map((g, idx) => {
+                        const combinedScore = g.scores ? g.scores[0] + g.scores[1] : 0;
                         return (
-                          <div
-                            key={i}
-                            className={`flex-1 h-6 rounded-sm border transition-all duration-500 ${
-                              isFilled
-                                ? isPink
-                                  ? 'bg-pink-400 border-pink-500 shadow-[0_0_4px_rgba(244,114,182,0.6)]'
-                                  : 'bg-cyan-400 border-cyan-500 shadow-[0_0_4px_rgba(34,211,238,0.6)]'
-                                : 'bg-white/10 border-white/20'
-                            }`}
+                          <PreviousGuessRow
+                            key={idx}
+                            roundLabel={`Guess ${idx + 1}`}
+                            guess={g}
+                            roundIndex={idx}
+                            adjectives={state.adjectives}
+                            onAppeal={openAppeal}
+                            appealsRemaining={0}
+                            canAppealNow={false}
+                            isBest={
+                              previousGuesses.length >= 2 &&
+                              bestIndex === idx &&
+                              combinedScore > 0 &&
+                              !g.isPass
+                            }
                           />
                         );
-                      })}
-                    </div>
+                      });
+                    })()}
+                      </div>
+                    ) : (
+                      <div className="text-center py-8">
+                        <div className="text-[0.75rem] text-otc-muted/60">
+                          No Judgements Passed Yet
                   </div>
-                  <div className="text-[0.8rem] sm:text-sm font-semibold text-center" style={{ color: 'rgb(255, 179, 21)' }}>
-                    That's a wrap! Scroll down to review the game and appeal your most
-                    underrated answer.
+                </div>
+              )}
                   </div>
                 </section>
-
-                {/* Complete State - Appeals Section */}
-                <section className="rounded-2xl bg-otc-bg-soft/90 border border-white/10 px-4 py-3 space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-[0.7rem] tracking-[0.2em] uppercase text-otc-muted">
-                      Tonight's board
+              ) : (
+                <div className="space-y-3 pb-3">
+                  {/* Complete State - Final Score Display */}
+                  <section className="rounded-2xl bg-black/30 border border-otc-accent/40 px-4 py-3 space-y-3">
+                    <div className="text-[0.7rem] tracking-[0.2em] uppercase text-otc-muted text-center">
+                      Final Score
                     </div>
-                    <div className="text-[0.8rem] sm:text-sm font-semibold text-otc-accent-alt">
-                      Appeals left: {state.appealsRemaining}
-                    </div>
-                  </div>
-                  <div className="text-[0.75rem] text-otc-muted">
-                    Tap the "Appeal" button on your most underrated answer to send it
-                    to the replay booth.
-                  </div>
-                  <div className="mt-2 space-y-2">
-                    <div className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 space-y-1.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <span className="font-display text-base text-otc-accent">
-                            {adjective1.toUpperCase()} & {adjective2.toUpperCase()}
-                          </span>
-                        </div>
+                    <div className="flex flex-col items-center gap-3">
+                      <div className="text-4xl sm:text-5xl font-bold text-otc-accent-alt">
+                        {topBarScore} / 10
                       </div>
-                      <div className="mt-1 grid grid-cols-1 gap-1.5">
-                        {state.guesses.map((g, ri) => {
-                          const combinedScore = g.scores ? g.scores[0] + g.scores[1] : 0;
-                          const bestIndex = getBestIndex(state.guesses);
+                      <div className="flex items-center justify-center gap-0.5 w-full max-w-xs">
+                        {Array.from({ length: 10 }, (_, i) => {
+                          const isPink = i < 5;
+                          const isFilled = pendingTopBarUpdates.has(i) || (isComplete && activeParticles.length === 0 && (isPink ? i < filledSegments1 : i - 5 < filledSegments2));
+                          
                           return (
-                            <PreviousGuessRow
-                              key={ri}
-                              roundLabel={`Guess ${ri + 1}`}
-                              guess={g}
-                              roundIndex={ri}
-                              adjectives={state.adjectives}
-                              onAppeal={openAppeal}
-                              appealsRemaining={state.appealsRemaining}
-                              canAppealNow={isComplete}
-                              isBest={
-                                ri === bestIndex && combinedScore > 0 && !g.isPass
-                              }
+                            <div
+                              key={i}
+                              className={`flex-1 h-6 rounded-sm border transition-all duration-500 ${
+                                isFilled
+                                  ? isPink
+                                    ? 'bg-pink-400 border-pink-500 shadow-[0_0_4px_rgba(244,114,182,0.6)]'
+                                    : 'bg-cyan-400 border-cyan-500 shadow-[0_0_4px_rgba(34,211,238,0.6)]'
+                                  : 'bg-white/10 border-white/20'
+                              }`}
                             />
                           );
                         })}
                       </div>
                     </div>
-                  </div>
-                </section>
-              </div>
-            )}
+                    <div className="text-[0.8rem] sm:text-sm font-semibold text-center" style={{ color: 'rgb(255, 179, 21)' }}>
+                      That's a wrap! Scroll down to review the game and appeal your most
+                      underrated answer.
+                    </div>
+                  </section>
+
+                  {/* Complete State - Appeals Section */}
+                  <section className="rounded-2xl bg-otc-bg-soft/90 border border-white/10 px-4 py-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-[0.7rem] tracking-[0.2em] uppercase text-otc-muted">
+                        Tonight's board
+                      </div>
+                      <div className="text-[0.8rem] sm:text-sm font-semibold text-otc-accent-alt">
+                        Appeals left: {state.appealsRemaining}
+                      </div>
+                    </div>
+                    <div className="text-[0.75rem] text-otc-muted">
+                      Tap the "Appeal" button on your most underrated answer to send it
+                      to the replay booth.
+                    </div>
+                    <div className="mt-2 space-y-2">
+                      <div className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="font-display text-base text-otc-accent">
+                              {adjective1.toUpperCase()} & {adjective2.toUpperCase()}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="mt-1 grid grid-cols-1 gap-1.5">
+                          {state.guesses.map((g, ri) => {
+                            const combinedScore = g.scores ? g.scores[0] + g.scores[1] : 0;
+                            const bestIndex = getBestIndex(state.guesses);
+                            return (
+                              <PreviousGuessRow
+                                key={ri}
+                                roundLabel={`Guess ${ri + 1}`}
+                                guess={g}
+                                roundIndex={ri}
+                                adjectives={state.adjectives}
+                                onAppeal={openAppeal}
+                                appealsRemaining={state.appealsRemaining}
+                                canAppealNow={isComplete}
+                                isBest={
+                                  ri === bestIndex && combinedScore > 0 && !g.isPass
+                                }
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* Bottom Chin - Input and Buttons */}
+          {/* Right Pillar */}
+          <div ref={rightPillarRef} className="w-10 flex-shrink-0 pt-2 overflow-hidden bg-otc-bg-soft/80">
+            <div className="h-full flex flex-col-reverse gap-1 px-1.5 relative">
+              {Array.from({ length: 5 }, (_, i) => {
+                const segmentThreshold = (i + 1) * 5; // Segment 0 = 5pts, segment 4 = 25pts
+                const prevThreshold = i * 5; // Previous segment threshold
+                const cappedScore = Math.min(cumulativeScore2, 25);
+                
+                // Calculate how much of this segment should be filled
+                let segmentFillPercent = 0;
+                const isMilestoneReached = cappedScore >= segmentThreshold;
+                // Check if this segment has reached milestone but particle hasn't been confirmed yet
+                const topBarIndex = i + 5; // Cyan segments are 5-9 in top bar
+                const hasActiveParticle = activeParticles.some(p => !p.isPink && p.segmentIndex === topBarIndex);
+                const isConfirmed = pendingTopBarUpdates.has(topBarIndex);
+                const isCharging = isMilestoneReached && !isConfirmed && !hasActiveParticle && i < filledSegments2;
+                
+                if (cappedScore >= segmentThreshold) {
+                  segmentFillPercent = 100;
+                } else if (cappedScore > prevThreshold) {
+                  segmentFillPercent = ((cappedScore - prevThreshold) / 5) * 100;
+                }
+                
+                return (
+                  <div
+                    key={i}
+                    className="w-full flex-1 rounded relative overflow-hidden border border-cyan-400/30 bg-black/30"
+                  >
+                    {/* Fill segment - clipped by segment boundaries */}
+                    <div
+                      className={`absolute bottom-0 left-0 right-0 bg-cyan-400 shadow-[0_0_4px_rgba(34,211,238,0.6)] rounded ${
+                        isCharging ? 'animate-pulse' : ''
+                      }`}
+                      style={{
+                        height: `${segmentFillPercent}%`,
+                        transition: 'height 0.5s linear',
+                        boxShadow: isCharging 
+                          ? '0 0 12px rgba(34,211,238,0.9), 0 0 20px rgba(34,211,238,0.6)' 
+                          : '0 0 4px rgba(34,211,238,0.6)',
+                      }}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+          {/* Bottom Row: Input Container - Full Width */}
           {!isComplete && (
-            <div className="flex-shrink-0 pt-2">
+            <div className="flex-shrink-0">
               {awaitingNextCategory && roundIndex < 2 ? (
                 <button
                   type="button"
@@ -917,7 +967,7 @@ export function Game() {
                   Continue
                 </button>
               ) : !awaitingNextCategory ? (
-                <section className="rounded-xl bg-otc-bg-soft/80 border border-white/5 px-3 py-2 flex flex-col gap-2">
+                <section className="bg-otc-bg-soft/80 px-3 py-2 flex flex-col gap-2">
                   <div className="space-y-1">
                     {/* Visually hide the label but keep it for screen readers */}
                     <label htmlFor="noun-input" className="sr-only">
@@ -982,7 +1032,7 @@ export function Game() {
                     >
                       {submitting
                         ? "Scoring…"
-                        : `Submit for Judgement (${roundIndex + 1}/3)`}
+                      : `Submit for Judgement (${roundIndex + 1}/3)`}
                     </button>
                     {previousGuesses.length > 0 && (
                       <button
@@ -1001,62 +1051,11 @@ export function Game() {
                     )}
                   </div>
             </section>
-              ) : null}
-            </div>
-          )}
-        </div>
-
-        {/* Right Pillar */}
-        <div ref={rightPillarRef} className="w-3 flex-shrink-0 pt-2 pb-2 overflow-hidden rounded">
-          <div className="h-full flex flex-col-reverse gap-0.5 relative">
-            {Array.from({ length: 5 }, (_, i) => {
-              const segmentThreshold = (i + 1) * 5; // Segment 0 = 5pts, segment 4 = 25pts
-              const prevThreshold = i * 5; // Previous segment threshold
-              const cappedScore = Math.min(cumulativeScore2, 25);
-              
-              // Calculate how much of this segment should be filled
-              let segmentFillPercent = 0;
-              const isMilestoneReached = cappedScore >= segmentThreshold;
-              // Check if this segment has reached milestone but particle hasn't been confirmed yet
-              const topBarIndex = i + 5; // Cyan segments are 5-9 in top bar
-              const hasActiveParticle = activeParticles.some(p => !p.isPink && p.segmentIndex === topBarIndex);
-              const isConfirmed = pendingTopBarUpdates.has(topBarIndex);
-              const isCharging = isMilestoneReached && !isConfirmed && !hasActiveParticle && i < filledSegments2;
-              
-              if (cappedScore >= segmentThreshold) {
-                segmentFillPercent = 100;
-              } else if (cappedScore > prevThreshold) {
-                segmentFillPercent = ((cappedScore - prevThreshold) / 5) * 100;
-              }
-              
-              return (
-                <div
-                  key={i}
-                  className="w-full flex-1 rounded relative overflow-hidden"
-                  style={{
-                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                  }}
-                >
-                  {/* Fill segment - clipped by segment boundaries */}
-                  <div
-                    className={`absolute bottom-0 left-0 right-0 bg-cyan-400 shadow-[0_0_4px_rgba(34,211,238,0.6)] rounded ${
-                      isCharging ? 'animate-pulse' : ''
-                    }`}
-                    style={{
-                      height: `${segmentFillPercent}%`,
-                      transition: 'height 0.5s linear',
-                      boxShadow: isCharging 
-                        ? '0 0 12px rgba(34,211,238,0.9), 0 0 20px rgba(34,211,238,0.6)' 
-                        : '0 0 4px rgba(34,211,238,0.6)',
-                    }}
-                  />
+            ) : null}
+                    </div>
+                  )}
                 </div>
-              );
-            })}
-                  </div>
-                  </div>
-                </div>
-
+      </div>
 
       {appealOpenFor !== null && (
         <AppealModal
