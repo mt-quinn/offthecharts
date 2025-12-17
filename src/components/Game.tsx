@@ -59,11 +59,8 @@ export function Game() {
 
   // Reference to the main guess input so we can autofocus it
   const guessInputRef = useRef<HTMLInputElement | null>(null);
-  // Reference to the category display to measure its bottom for pillar positioning
+  // Reference to the category display
   const categoryRef = useRef<HTMLElement | null>(null);
-  const [categoryBottom, setCategoryBottom] = useState<number>(140);
-  // Track if first score has been received (triggers pillar appearance and fill animation)
-  const [firstScoreReceived, setFirstScoreReceived] = useState(false);
   // Track previous cumulative scores for smooth animation transitions
   const prevCumulativeScoresRef = useRef<[number, number]>([0, 0]);
   // Track which placeholder categories have been used for each round
@@ -118,21 +115,6 @@ export function Game() {
       }, isSameTurn ? 0 : 20);
     }
   }, [state, currentTurn, awaitingNextCategory]);
-
-  // Measure category section bottom for pillar positioning
-  useEffect(() => {
-    if (!categoryRef.current) return;
-    const updatePosition = () => {
-      const rect = categoryRef.current?.getBoundingClientRect();
-      const parentRect = categoryRef.current?.offsetParent?.getBoundingClientRect();
-      if (rect && parentRect) {
-        setCategoryBottom(rect.bottom - parentRect.top);
-      }
-    };
-    updatePosition();
-    window.addEventListener('resize', updatePosition);
-    return () => window.removeEventListener('resize', updatePosition);
-  }, [state, isComplete, awaitingNextCategory]);
 
   // Calculate cumulative scores for animation (must be before early return)
   const getCumulativeScoresForAnimation = (): [number, number] => {
@@ -271,21 +253,11 @@ export function Game() {
       const data = (await res.json()) as ScoreResponse;
       submitGuessLocally(roundIndex, trimmed);
       if (typeof data.score1 === "number" && typeof data.score2 === "number") {
-        // Mark that first score has been received (triggers pillar appearance)
-        if (!firstScoreReceived) {
-          setFirstScoreReceived(true);
-        }
-        
         applyScore(
           roundIndex,
           [data.score1, data.score2],
           [data.reasoning1 || "", data.reasoning2 || ""],
         );
-        
-        // Mark that first score has been received (triggers pillar appearance)
-        if (!firstScoreReceived) {
-          setFirstScoreReceived(true);
-        }
         
         // Update previous scores after a delay to allow state to update
         setTimeout(() => {
@@ -484,85 +456,6 @@ export function Game() {
   return (
     <div className="h-full flex flex-col relative">
 
-      {/* Score pillars on either side */}
-      {firstScoreReceived && (
-        <>
-          <div className="absolute left-2 bottom-6 w-3 pointer-events-none pt-2 overflow-hidden rounded" style={{ top: `${categoryBottom}px`, height: `calc(100% - ${categoryBottom}px - 1.5rem)` }}>
-            {/* Segments with fill that accurately represents score position (0-25 points, 5 segments) */}
-            <div className="h-full flex flex-col-reverse gap-0.5 relative">
-              {Array.from({ length: 5 }, (_, i) => {
-                const segmentThreshold = (i + 1) * 5; // Segment 0 = 5pts, segment 4 = 25pts
-                const prevThreshold = i * 5; // Previous segment threshold
-                const cappedScore = Math.min(cumulativeScore1, 25);
-                
-                // Calculate how much of this segment should be filled
-                let segmentFillPercent = 0;
-                if (cappedScore >= segmentThreshold) {
-                  segmentFillPercent = 100;
-                } else if (cappedScore > prevThreshold) {
-                  segmentFillPercent = ((cappedScore - prevThreshold) / 5) * 100;
-                }
-                
-                return (
-                  <div
-                    key={i}
-                    className="w-full flex-1 rounded relative overflow-hidden"
-                    style={{
-                      backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                    }}
-                  >
-                    {/* Fill segment - clipped by segment boundaries */}
-                    <div
-                      className="absolute bottom-0 left-0 right-0 bg-pink-400 shadow-[0_0_4px_rgba(244,114,182,0.6)] rounded"
-                      style={{
-                        height: `${segmentFillPercent}%`,
-                        transition: firstScoreReceived ? 'height 0.5s linear' : 'none',
-                      }}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-          <div className="absolute right-2 bottom-6 w-3 pointer-events-none pt-2 overflow-hidden rounded" style={{ top: `${categoryBottom}px`, height: `calc(100% - ${categoryBottom}px - 1.5rem)` }}>
-            {/* Segments with fill that accurately represents score position (0-25 points, 5 segments) */}
-            <div className="h-full flex flex-col-reverse gap-0.5 relative">
-              {Array.from({ length: 5 }, (_, i) => {
-                const segmentThreshold = (i + 1) * 5; // Segment 0 = 5pts, segment 4 = 25pts
-                const prevThreshold = i * 5; // Previous segment threshold
-                const cappedScore = Math.min(cumulativeScore2, 25);
-                
-                // Calculate how much of this segment should be filled
-                let segmentFillPercent = 0;
-                if (cappedScore >= segmentThreshold) {
-                  segmentFillPercent = 100;
-                } else if (cappedScore > prevThreshold) {
-                  segmentFillPercent = ((cappedScore - prevThreshold) / 5) * 100;
-                }
-                
-                return (
-                  <div
-                    key={i}
-                    className="w-full flex-1 rounded relative overflow-hidden"
-                    style={{
-                      backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                    }}
-                  >
-                    {/* Fill segment - clipped by segment boundaries */}
-                    <div
-                      className="absolute bottom-0 left-0 right-0 bg-cyan-400 shadow-[0_0_4px_rgba(34,211,238,0.6)] rounded"
-                      style={{
-                        height: `${segmentFillPercent}%`,
-                        transition: firstScoreReceived ? 'height 0.5s linear' : 'none',
-                      }}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </>
-      )}
       {isDebug && (
         <div className="px-3 pt-2 pb-1 text-[0.6rem] text-otc-muted flex items-center justify-between gap-2">
           <span className="uppercase tracking-[0.2em]">Debug</span>
@@ -628,23 +521,9 @@ export function Game() {
         </div>
       </header>
 
-      {!isComplete && awaitingNextCategory && roundIndex < 2 && (
-        <div className="px-8 pb-1.5">
-          <button
-            type="button"
-            onClick={() => {
-              setAwaitingNextCategory(false);
-              advanceTurn();
-            }}
-            className="w-full inline-flex items-center justify-center rounded-full bg-gradient-to-r from-otc-accent-strong to-otc-accent-alt px-4 py-2 text-sm font-semibold text-black shadow-otc-glow"
-          >
-            Continue
-          </button>
-        </div>
-      )}
 
       {!isComplete && (
-        <div className="px-7">
+        <div className="px-7 mb-3">
           <section 
             ref={categoryRef}
             className="px-3 py-2 rounded-xl bg-black/20 border border-white/10 shadow-inner flex flex-col gap-1.5 items-center"
@@ -663,16 +542,55 @@ export function Game() {
         </div>
       )}
 
-      <div className={`flex-1 flex flex-col px-7 pb-3 gap-2.5 overflow-y-auto ${!isComplete && previousGuesses.length === 0 ? 'pt-4' : ''}`}>
-        {!isComplete && (
-          <>
+      {/* Unified Scoreboard */}
+      <div className="flex-1 flex items-stretch gap-2 px-7 pb-3 min-h-0">
+        {/* Left Pillar */}
+        <div className="w-3 flex-shrink-0 pt-2 pb-2 overflow-hidden rounded">
+          <div className="h-full flex flex-col-reverse gap-0.5 relative">
+            {Array.from({ length: 5 }, (_, i) => {
+              const segmentThreshold = (i + 1) * 5; // Segment 0 = 5pts, segment 4 = 25pts
+              const prevThreshold = i * 5; // Previous segment threshold
+              const cappedScore = Math.min(cumulativeScore1, 25);
+              
+              // Calculate how much of this segment should be filled
+              let segmentFillPercent = 0;
+              if (cappedScore >= segmentThreshold) {
+                segmentFillPercent = 100;
+              } else if (cappedScore > prevThreshold) {
+                segmentFillPercent = ((cappedScore - prevThreshold) / 5) * 100;
+              }
+              
+              return (
+                <div
+                  key={i}
+                  className="w-full flex-1 rounded relative overflow-hidden"
+                  style={{
+                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                  }}
+                >
+                  {/* Fill segment - clipped by segment boundaries */}
+                  <div
+                    className="absolute bottom-0 left-0 right-0 bg-pink-400 shadow-[0_0_4px_rgba(244,114,182,0.6)] rounded"
+                    style={{
+                      height: `${segmentFillPercent}%`,
+                      transition: 'height 0.5s linear',
+                    }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
 
-            <section className="rounded-xl bg-otc-bg-soft/80 border border-white/5 px-3 py-2 flex flex-col gap-2">
-              {previousGuesses.length > 0 && (
-                <div className="space-y-1.5">
-                  <div className="text-xs tracking-[0.25em] uppercase text-otc-accent-alt font-semibold text-center">
-                    Scoreboard
-                  </div>
+        {/* Middle Content Area - Scrollable */}
+        <div className="flex-1 flex flex-col min-w-0 min-h-0">
+          <div className="flex-1 overflow-y-auto">
+            <section className="rounded-xl bg-otc-bg-soft/80 border border-white/5 px-3 py-2 flex flex-col gap-2 min-h-full">
+              <div className="space-y-1.5">
+                <div className="text-xs tracking-[0.25em] uppercase text-otc-accent-alt font-semibold text-center">
+                  Scoreboard
+                </div>
+                {previousGuesses.length > 0 ? (
                   <div className="space-y-1.5">
                     {(() => {
                       const bestIndex = getBestIndex(state.guesses);
@@ -699,11 +617,33 @@ export function Game() {
                       });
                     })()}
                   </div>
-                </div>
-              )}
+                ) : (
+                  <div className="text-center py-8">
+                    <div className="text-[0.75rem] text-otc-muted/60">
+                      No Judgements Passed Yet
+                    </div>
+                  </div>
+                )}
+              </div>
+            </section>
+          </div>
 
-              {!awaitingNextCategory && (
-                <>
+          {/* Bottom Chin - Input and Buttons */}
+          {!isComplete && (
+            <div className="flex-shrink-0 pt-2">
+              {awaitingNextCategory && roundIndex < 2 ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAwaitingNextCategory(false);
+                    advanceTurn();
+                  }}
+                  className="w-full inline-flex items-center justify-center rounded-full bg-gradient-to-r from-otc-accent-strong to-otc-accent-alt px-4 py-2 text-sm font-semibold text-black shadow-otc-glow"
+                >
+                  Continue
+                </button>
+              ) : !awaitingNextCategory ? (
+                <section className="rounded-xl bg-otc-bg-soft/80 border border-white/5 px-3 py-2 flex flex-col gap-2">
                   <div className="space-y-1">
                     {/* Visually hide the label but keep it for screen readers */}
                     <label htmlFor="noun-input" className="sr-only">
@@ -786,14 +726,55 @@ export function Game() {
                       </button>
                     )}
                   </div>
-                </>
-              )}
-            </section>
-          </>
-        )}
+                </section>
+              ) : null}
+            </div>
+          )}
+        </div>
 
-        {isComplete && (
-          <section className="mt-1 rounded-2xl bg-black/30 border border-otc-accent/40 px-4 py-3 space-y-3">
+        {/* Right Pillar */}
+        <div className="w-3 flex-shrink-0 pt-2 pb-2 overflow-hidden rounded">
+          <div className="h-full flex flex-col-reverse gap-0.5 relative">
+            {Array.from({ length: 5 }, (_, i) => {
+              const segmentThreshold = (i + 1) * 5; // Segment 0 = 5pts, segment 4 = 25pts
+              const prevThreshold = i * 5; // Previous segment threshold
+              const cappedScore = Math.min(cumulativeScore2, 25);
+              
+              // Calculate how much of this segment should be filled
+              let segmentFillPercent = 0;
+              if (cappedScore >= segmentThreshold) {
+                segmentFillPercent = 100;
+              } else if (cappedScore > prevThreshold) {
+                segmentFillPercent = ((cappedScore - prevThreshold) / 5) * 100;
+              }
+              
+              return (
+                <div
+                  key={i}
+                  className="w-full flex-1 rounded relative overflow-hidden"
+                  style={{
+                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                  }}
+                >
+                  {/* Fill segment - clipped by segment boundaries */}
+                  <div
+                    className="absolute bottom-0 left-0 right-0 bg-cyan-400 shadow-[0_0_4px_rgba(34,211,238,0.6)] rounded"
+                    style={{
+                      height: `${segmentFillPercent}%`,
+                      transition: 'height 0.5s linear',
+                    }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Complete State - Final Score Display */}
+      {isComplete && (
+        <div className="px-7 pb-3">
+          <section className="rounded-2xl bg-black/30 border border-otc-accent/40 px-4 py-3 space-y-3">
             <div className="text-[0.7rem] tracking-[0.2em] uppercase text-otc-muted text-center">
               Final Score
             </div>
@@ -829,10 +810,13 @@ export function Game() {
               underrated answer.
             </div>
           </section>
-        )}
+        </div>
+      )}
 
-        {isComplete && (
-          <section className="mt-1 rounded-2xl bg-otc-bg-soft/90 border border-white/10 px-4 py-3 space-y-2">
+      {/* Complete State - Appeals Section */}
+      {isComplete && (
+        <div className="px-7 pb-3">
+          <section className="rounded-2xl bg-otc-bg-soft/90 border border-white/10 px-4 py-3 space-y-2">
             <div className="flex items-center justify-between gap-2">
               <div className="text-[0.7rem] tracking-[0.2em] uppercase text-otc-muted">
                 Tonight's board
@@ -878,8 +862,8 @@ export function Game() {
               </div>
             </div>
           </section>
-        )}
-      </div>
+        </div>
+      )}
 
       {appealOpenFor !== null && (
         <AppealModal
