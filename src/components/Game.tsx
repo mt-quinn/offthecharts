@@ -96,6 +96,14 @@ export function Game() {
   const leftClipId = `otc-left-pillar-clip-${leftClipIdRaw.replace(/:/g, "")}`;
   const rightClipId = `otc-right-pillar-clip-${rightClipIdRaw.replace(/:/g, "")}`;
 
+  const pillarMeasureKey = useMemo(() => {
+    if (!state) return "no-state";
+    // Re-run measurement when a new game is loaded (daily key or debug-random adjectives)
+    return state.mode === "debug-random"
+      ? `random-${state.adjectives[0]}-${state.adjectives[1]}`
+      : state.dateKey;
+  }, [state]);
+
   // Temporarily force debug tools on in all builds (including production)
   // so they are available while testing.
   const isDebug = true;
@@ -493,13 +501,21 @@ export function Game() {
   // Measure exact segment geometry (including gaps + rounded corners) for hard clipping
   useLayoutEffect(() => {
     const container = leftSegmentContainerRef.current;
-    if (!container) return;
+    if (!container) {
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/1abfa7d3-0a13-47b3-bdfa-64763366f0c4',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'pre-fix-1',hypothesisId:'H1',location:'src/components/Game.tsx:left useLayoutEffect',message:'leftSegmentContainerRef missing (no geometry measurement possible)',data:{hasState:!!state},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+      return;
+    }
 
     let raf = 0;
     const update = () => {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
         const geom = readPillarGeom(container);
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/1abfa7d3-0a13-47b3-bdfa-64763366f0c4',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'pre-fix-1',hypothesisId:'H2',location:'src/components/Game.tsx:left update()',message:'measured left pillar geom',data:{clientW:container.clientWidth,clientH:container.clientHeight,segCount:container.querySelectorAll('[data-pillar-segment]').length,geomW:geom?.w ?? null,geomH:geom?.h ?? null,rectCount:geom?.rects?.length ?? null,firstRect:geom?.rects?.[0] ?? null},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
         if (geom) setLeftPillarGeom(geom);
       });
     };
@@ -512,17 +528,25 @@ export function Game() {
       cancelAnimationFrame(raf);
       ro.disconnect();
     };
-  }, [readPillarGeom]);
+  }, [readPillarGeom, pillarMeasureKey, state]);
 
   useLayoutEffect(() => {
     const container = rightSegmentContainerRef.current;
-    if (!container) return;
+    if (!container) {
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/1abfa7d3-0a13-47b3-bdfa-64763366f0c4',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'pre-fix-1',hypothesisId:'H1',location:'src/components/Game.tsx:right useLayoutEffect',message:'rightSegmentContainerRef missing (no geometry measurement possible)',data:{hasState:!!state},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+      return;
+    }
 
     let raf = 0;
     const update = () => {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
         const geom = readPillarGeom(container);
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/1abfa7d3-0a13-47b3-bdfa-64763366f0c4',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'pre-fix-1',hypothesisId:'H2',location:'src/components/Game.tsx:right update()',message:'measured right pillar geom',data:{clientW:container.clientWidth,clientH:container.clientHeight,segCount:container.querySelectorAll('[data-pillar-segment]').length,geomW:geom?.w ?? null,geomH:geom?.h ?? null,rectCount:geom?.rects?.length ?? null,firstRect:geom?.rects?.[0] ?? null},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
         if (geom) setRightPillarGeom(geom);
       });
     };
@@ -535,7 +559,27 @@ export function Game() {
       cancelAnimationFrame(raf);
       ro.disconnect();
     };
-  }, [readPillarGeom]);
+  }, [readPillarGeom, pillarMeasureKey, state]);
+
+  useEffect(() => {
+    const leftContainer = leftSegmentContainerRef.current;
+    const rightContainer = rightSegmentContainerRef.current;
+
+    const leftSvg = leftContainer?.querySelector("svg");
+    const rightSvg = rightContainer?.querySelector("svg");
+
+    const leftSvgRect = leftSvg?.getBoundingClientRect();
+    const rightSvgRect = rightSvg?.getBoundingClientRect();
+
+    const raw1 = Math.min(cumulativeScore1, 25) / 25;
+    const raw2 = Math.min(cumulativeScore2, 25) / 25;
+    const scale1 = Number.isFinite(raw1) ? Math.max(0, Math.min(1, raw1)) : null;
+    const scale2 = Number.isFinite(raw2) ? Math.max(0, Math.min(1, raw2)) : null;
+
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/1abfa7d3-0a13-47b3-bdfa-64763366f0c4',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'pre-fix-1',hypothesisId:'H3',location:'src/components/Game.tsx:svg presence useEffect',message:'pillar svg overlay presence + sizes',data:{cum1:cumulativeScore1,cum2:cumulativeScore2,scale1,scale2,hasLeftGeom:!!leftPillarGeom,hasRightGeom:!!rightPillarGeom,leftGeom:leftPillarGeom?{w:leftPillarGeom.w,h:leftPillarGeom.h,rectCount:leftPillarGeom.rects.length}:null,rightGeom:rightPillarGeom?{w:rightPillarGeom.w,h:rightPillarGeom.h,rectCount:rightPillarGeom.rects.length}:null,hasLeftSvg:!!leftSvg,hasRightSvg:!!rightSvg,leftSvgRect:leftSvgRect?{w:leftSvgRect.width,h:leftSvgRect.height}:null,rightSvgRect:rightSvgRect?{w:rightSvgRect.width,h:rightSvgRect.height}:null},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+  }, [cumulativeScore1, cumulativeScore2, leftPillarGeom, rightPillarGeom]);
 
   // Detect new segments and trigger particles - MUST be before early return
   useEffect(() => {
@@ -863,22 +907,25 @@ export function Game() {
                     <rect x="0" y="0" width={leftPillarGeom.w} height={leftPillarGeom.h} fill="rgba(0,0,0,0.30)" />
                     {/* fill */}
                     {(() => {
-                      const pct = Math.min(100, (Math.min(cumulativeScore1, 25) / 25) * 100);
-                      const scale = pct / 100;
+                      const raw = Math.min(cumulativeScore1, 25) / 25;
+                      const scale = Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 0;
                       return (
-                        <rect
-                          x="0"
-                          y="0"
-                          width={leftPillarGeom.w}
-                          height={leftPillarGeom.h}
-                          fill="rgb(244, 114, 182)"
+                        <g
                           style={{
-                            transformBox: "fill-box",
-                            transformOrigin: "center bottom",
-                            transform: `scaleY(${scale})`,
+                            // Firefox is finicky about SVG transform-origin/transform-box.
+                            // This translate/scale/translate pins the scale to the bottom in user units.
+                            transform: `translate(0px, ${leftPillarGeom.h}px) scale(1, ${scale}) translate(0px, ${-leftPillarGeom.h}px)`,
                             transition: "transform 0.5s linear",
                           }}
-                        />
+                        >
+                          <rect
+                            x="0"
+                            y="0"
+                            width={leftPillarGeom.w}
+                            height={leftPillarGeom.h}
+                            fill="rgb(244, 114, 182)"
+                          />
+                        </g>
                       );
                     })()}
                   </g>
@@ -1086,22 +1133,23 @@ export function Game() {
                     <rect x="0" y="0" width={rightPillarGeom.w} height={rightPillarGeom.h} fill="rgba(0,0,0,0.30)" />
                     {/* fill */}
                     {(() => {
-                      const pct = Math.min(100, (Math.min(cumulativeScore2, 25) / 25) * 100);
-                      const scale = pct / 100;
+                      const raw = Math.min(cumulativeScore2, 25) / 25;
+                      const scale = Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 0;
                       return (
-                        <rect
-                          x="0"
-                          y="0"
-                          width={rightPillarGeom.w}
-                          height={rightPillarGeom.h}
-                          fill="rgb(34, 211, 238)"
+                        <g
                           style={{
-                            transformBox: "fill-box",
-                            transformOrigin: "center bottom",
-                            transform: `scaleY(${scale})`,
+                            transform: `translate(0px, ${rightPillarGeom.h}px) scale(1, ${scale}) translate(0px, ${-rightPillarGeom.h}px)`,
                             transition: "transform 0.5s linear",
                           }}
-                        />
+                        >
+                          <rect
+                            x="0"
+                            y="0"
+                            width={rightPillarGeom.w}
+                            height={rightPillarGeom.h}
+                            fill="rgb(34, 211, 238)"
+                          />
+                        </g>
                       );
                     })()}
                   </g>
